@@ -212,6 +212,9 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
     case "status":
       document.body.dataset.sessionStatus = message.status;
       break;
+    case "pasteText":
+      term.paste(message.text);
+      break;
   }
 });
 

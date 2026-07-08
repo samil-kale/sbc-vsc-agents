@@ -61,10 +61,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
         case "dropFile": {
           // The webview only ever gets the dropped file's content, never a real path
           // (VS Code sandboxes that away) - save it here, where we have real fs access,
-          // and type the resulting path so the CLI can pick it up like a typed reference.
+          // and paste the resulting path so the CLI can pick it up like a typed reference.
+          // Routed through the webview's paste channel (like clipboard text) rather than
+          // written to the pty directly, so it can't be misread as individual keystrokes
+          // (e.g. vim-mode commands) by whatever input mode the CLI is currently in.
           const filePath = path.join(os.tmpdir(), `sbc-drop-${Date.now()}-${path.basename(message.name)}`);
           fs.writeFileSync(filePath, Buffer.from(message.dataBase64, "base64"));
-          this.session?.write(`${filePath} `);
+          this.post({ type: "pasteText", text: `${filePath} ` });
           break;
         }
         case "openFile":

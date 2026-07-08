@@ -2,7 +2,8 @@ import type { SessionStatus } from "./session";
 
 export type HostToWebviewMessage =
   | { type: "output"; data: string }
-  | { type: "status"; status: SessionStatus };
+  | { type: "status"; status: SessionStatus }
+  | { type: "pasteText"; text: string };
 
 export type WebviewToHostMessage =
   | { type: "ready" }
