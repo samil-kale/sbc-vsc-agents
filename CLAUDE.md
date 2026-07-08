@@ -56,3 +56,17 @@ OS-specific behavior without providing the equivalent for the other platforms:
 
 Launch the Extension Development Host with **Ctrl+F5** (Run Without Debugging), not F5 —
 launching with the debugger attached (F5) does not work for this project.
+
+## Release
+
+Pushing `production` triggers `.github/workflows/publish.yml`, which publishes both
+extensions to the VS Code Marketplace. When asked to "release":
+
+1. Switch to `development` (if not already there).
+2. Bump the version in both `sbc-claude-code/package.json` and
+   `sbc-open-code/package.json` to the same next patch version — both bundle
+   `shared/`, so bump both even if only one extension's code changed.
+3. Commit changes, then the bump as its own `bump version to X.Y.Z` commit.
+4. Push `development`.
+5. Fast-forward merge into `production` and push.
+6. Switch back to `development`.
