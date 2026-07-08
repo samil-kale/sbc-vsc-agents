@@ -2,7 +2,7 @@
   "name": "sbc-claude",
   "displayName": "SBC Claude Code",
   "description": "Sidebar terminal for running Claude Code inside VS Code.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "samil-kale",
   "license": "MIT",
   "repository": {
@@ -39,15 +39,25 @@
     "configuration": {
       "title": "SBC Claude Code",
       "properties": {
-        "sbcClaude.agentPath": {
+        "sbcClaudeCode.agentPath": {
           "type": "string",
           "default": "claude",
           "description": "Path or command name of the Claude Code executable."
         },
-        "sbcClaude.notifications": {
+        "sbcClaudeCode.notifyFinished": {
           "type": "boolean",
           "default": true,
           "description": "Show a native OS notification when Claude Code finishes responding."
+        },
+        "sbcClaudeCode.notifyNeedsYou": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native OS notification when Claude Code is blocked mid-turn and needs you - a permission prompt, an MCP elicitation, or an AskUserQuestion prompt."
+        },
+        "sbcClaudeCode.notifyIdleReminder": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a native OS notification as a reminder if Claude Code has been idle waiting for your next prompt for a while. Usually redundant with the 'finished' notification, so off by default."
         }
       }
     }

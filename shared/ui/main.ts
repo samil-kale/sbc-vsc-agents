@@ -59,6 +59,10 @@ document.documentElement.addEventListener("mouseenter", () => {
 });
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
+  // The CLI itself already pastes clipboard text on a right click (it sees the
+  // right mouse button through xterm's mouse reporting) - only handle the image
+  // case here, or plain text would get inserted twice.
+  void pasteFromClipboard(true);
 });
 
 // VS Code disables a webview's iframe (pointer-events: none) for the duration of any
@@ -129,6 +133,30 @@ term.onData((data) => {
   vscode.postMessage({ type: "input", data });
 });
 
+// A pasted image (e.g. a copied screenshot) has no filesystem path either - same
+// as a dropped file, hand its content to the extension host so it can save it to
+// a temp file and type the resulting path. Falls back to plain text otherwise.
+async function pasteFromClipboard(isRightClick: boolean): Promise<void> {
+  const items = await navigator.clipboard.read();
+  for (const item of items) {
+    const imageType = item.types.find((type) => type.startsWith("image/"));
+    if (imageType) {
+      const blob = await item.getType(imageType);
+      const buffer = await blob.arrayBuffer();
+      const extension = imageType.split("/")[1] ?? "png";
+      vscode.postMessage({
+        type: "dropFile",
+        name: `pasted-image-${Date.now()}.${extension}`,
+        dataBase64: arrayBufferToBase64(buffer)
+      });
+      return;
+    }
+  }
+  if (!isRightClick) {
+    term.paste(await navigator.clipboard.readText());
+  }
+}
+
 // xterm can't tell Shift+Enter from plain Enter at the data level - both would
 // otherwise arrive as the same "\r". Intercept it here and send the same ESC+CR
 // sequence VS Code's own terminal.sendSequence keybinding uses for "insert newline".
@@ -142,6 +170,18 @@ term.attachCustomKeyEventHandler((event) => {
     event.stopPropagation();
     if (!event.repeat) {
       vscode.postMessage({ type: "input", data: "\x1b\r" });
+    }
+    return false;
+  }
+  // xterm's default keydown handling treats Ctrl+V (Cmd+V on macOS) as the literal
+  // control character 0x16 and calls preventDefault() on it - which stops the browser
+  // from ever firing its native paste event, so the clipboard content never gets read.
+  // Intercept it here and paste explicitly via the Clipboard API instead.
+  if (event.type === "keydown" && event.key.toLowerCase() === "v" && isModifierHeld(event) && !event.shiftKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) {
+      void pasteFromClipboard(false);
     }
     return false;
   }

@@ -8,7 +8,7 @@ export function activate(context: vscode.ExtensionContext): void {
     displayName: "Open Code",
     executable: "opencode",
     extensionName: "sbc-opencode",
-    settingsPrefix: "sbcOpencode",
+    settingsPrefix: "sbcOpenCode",
     env: { OPENCODE_TUI_CONFIG: context.asAbsolutePath("resources/tui.json") },
     resumeArgs: opencodeResumeArgs
   });

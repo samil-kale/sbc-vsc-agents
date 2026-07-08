@@ -9,7 +9,7 @@ export function activate(context: vscode.ExtensionContext): void {
     displayName: "Claude Code",
     executable: "claude",
     extensionName: "sbc-claude",
-    settingsPrefix: "sbcClaude",
+    settingsPrefix: "sbcClaudeCode",
     setupHooks: setupClaudeHooks,
     resumeArgs: claudeResumeArgs
   });

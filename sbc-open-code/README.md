@@ -11,10 +11,10 @@ Sidebar terminal for running [opencode](https://opencode.ai) inside VS Code — 
 
 ## Requirements
 
-- opencode CLI installed and available on `PATH` (or configured via `sbcOpencode.agentPath`).
+- opencode CLI installed and available on `PATH` (or configured via `sbcOpenCode.agentPath`).
 
 ## Settings
 
 | Setting | Default | Description |
 |---|---|---|
-| `sbcOpencode.agentPath` | `opencode` | Path or command name of the opencode executable. |
+| `sbcOpenCode.agentPath` | `opencode` | Path or command name of the opencode executable. |

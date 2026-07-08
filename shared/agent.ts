@@ -2,6 +2,15 @@ import type * as vscode from "vscode";
 
 export type AgentId = "claude" | "opencode";
 
+export interface NotificationSettings {
+  /** Claude finished responding (Stop). */
+  finished: boolean;
+  /** Claude is blocked mid-turn on a permission prompt, MCP elicitation, or AskUserQuestion. */
+  needsYou: boolean;
+  /** Claude has been idle waiting for the next prompt for a while (idle_prompt) - usually redundant with `finished`. */
+  idleReminder: boolean;
+}
+
 export interface HooksSetup {
   /** Extra CLI args that register the generated hooks. */
   args: string[];
@@ -25,7 +34,7 @@ export interface AgentConfig {
     context: vscode.ExtensionContext,
     agent: AgentConfig,
     workspaceRoot: string,
-    notifications: boolean
+    notifications: NotificationSettings
   ) => HooksSetup;
   /**
    * Returns the CLI args that resume the most recent session for the given

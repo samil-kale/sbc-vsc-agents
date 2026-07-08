@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentConfig, HooksSetup } from "@shared/agent";
+import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
 import { buildNotifyCommand } from "@shared/os-notify";
 import { buildReadContextCommand, IdeContextTracker } from "@shared/ide-context";
 
@@ -9,8 +9,8 @@ import { buildReadContextCommand, IdeContextTracker } from "@shared/ide-context"
  * Wires up sbc's Claude Code hook integrations: a UserPromptSubmit hook that injects
  * live editor state into every prompt, and native OS notifications for the moments a
  * user typically wants to be pulled back to the sidebar — the agent finishing
- * (Stop), a permission/idle prompt (Notification), and an AskUserQuestion prompt
- * (PreToolUse). Everything is scoped to a per-spawn --settings file — it never
+ * (Stop), a blocking mid-turn prompt (Notification/PreToolUse), and an idle reminder
+ * (Notification). Everything is scoped to a per-spawn --settings file — it never
  * touches the user's own ~/.claude/settings.json or the OS (no registry writes, no
  * installs).
  */
@@ -18,7 +18,7 @@ export function setupClaudeHooks(
   context: vscode.ExtensionContext,
   agent: AgentConfig,
   workspaceRoot: string,
-  notifications: boolean
+  notifications: NotificationSettings
 ): HooksSetup {
   const storageDir = (context.storageUri ?? context.globalStorageUri).fsPath;
   fs.mkdirSync(storageDir, { recursive: true });
@@ -29,10 +29,10 @@ export function setupClaudeHooks(
   const hooks: Record<string, unknown> = {
     UserPromptSubmit: [{ hooks: [{ type: "command", command: readContextCommand }] }]
   };
-  if (notifications) {
-    const workspaceName = path.basename(workspaceRoot);
-    const name = agent.displayName;
+  const workspaceName = path.basename(workspaceRoot);
+  const name = agent.displayName;
 
+  if (notifications.finished) {
     hooks.Stop = [
       {
         hooks: [
@@ -43,22 +43,33 @@ export function setupClaudeHooks(
         ]
       }
     ];
-    hooks.Notification = [
-      {
-        matcher: "permission_prompt|elicitation_dialog|idle_prompt",
-        hooks: [
-          {
-            type: "command",
-            command: buildNotifyCommand(
-              storageDir,
-              "notification",
-              `${name}: Action needed`,
-              `Waiting for input in ${workspaceName}`
-            )
-          }
-        ]
-      }
-    ];
+  }
+
+  const notificationMatchers: { id: string; matcher: string; title: string; body: string }[] = [];
+  if (notifications.needsYou) {
+    notificationMatchers.push({
+      id: "needs-you",
+      matcher: "permission_prompt|elicitation_dialog",
+      title: `${name}: Action needed`,
+      body: `Waiting for input in ${workspaceName}`
+    });
+  }
+  if (notifications.idleReminder) {
+    notificationMatchers.push({
+      id: "idle",
+      matcher: "idle_prompt",
+      title: `${name}: Still waiting`,
+      body: `No response yet in ${workspaceName}`
+    });
+  }
+  if (notificationMatchers.length > 0) {
+    hooks.Notification = notificationMatchers.map(({ id, matcher, title, body }) => ({
+      matcher,
+      hooks: [{ type: "command", command: buildNotifyCommand(storageDir, id, title, body) }]
+    }));
+  }
+
+  if (notifications.needsYou) {
     hooks.PreToolUse = [
       {
         matcher: "AskUserQuestion",

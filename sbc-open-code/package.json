@@ -2,7 +2,7 @@
   "name": "sbc-opencode",
   "displayName": "SBC Open Code",
   "description": "Sidebar terminal for running OpenCode inside VS Code.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "samil-kale",
   "private": true,
   "license": "MIT",
@@ -40,7 +40,7 @@
     "configuration": {
       "title": "SBC Open Code",
       "properties": {
-        "sbcOpencode.agentPath": {
+        "sbcOpenCode.agentPath": {
           "type": "string",
           "default": "opencode",
           "description": "Path or command name of the OpenCode executable."
