@@ -1,0 +1,64 @@
+{
+  "name": "sbc-opencode",
+  "displayName": "SBC Open Code",
+  "description": "Sidebar terminal for running OpenCode inside VS Code.",
+  "version": "1.0.0",
+  "publisher": "samil-kale",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samil-kale/sbc-vsc-agents.git",
+    "directory": "sbc-open-code"
+  },
+  "icon": "media/marketplace-icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sbc-opencode",
+          "title": "SBC OPEN CODE",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sbc-opencode": [
+        {
+          "id": "sbc-opencode.view",
+          "name": "SBC OPEN CODE",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SBC Open Code",
+      "properties": {
+        "sbcOpencode.agentPath": {
+          "type": "string",
+          "default": "opencode",
+          "description": "Path or command name of the OpenCode executable."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "vscode:prepublish": "node esbuild.js --production",
+    "typecheck": "tsc --noEmit -p .",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  }
+}

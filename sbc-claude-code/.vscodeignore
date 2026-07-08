@@ -1,0 +1,6 @@
+src/**
+tsconfig.json
+esbuild.js
+.vscodeignore
+dist/**/*.map
+dist/node_pty/**/*.pdb

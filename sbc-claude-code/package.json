@@ -1,0 +1,68 @@
+{
+  "name": "sbc-claude",
+  "displayName": "SBC Claude Code",
+  "description": "Sidebar terminal for running Claude Code inside VS Code.",
+  "version": "1.0.0",
+  "publisher": "samil-kale",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samil-kale/sbc-vsc-agents.git",
+    "directory": "sbc-claude-code"
+  },
+  "icon": "media/marketplace-icon.png",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "main": "./dist/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "sbc-claude",
+          "title": "SBC CLAUDE CODE",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "sbc-claude": [
+        {
+          "id": "sbc-claude.view",
+          "name": "SBC CLAUDE CODE",
+          "type": "webview"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "SBC Claude Code",
+      "properties": {
+        "sbcClaude.agentPath": {
+          "type": "string",
+          "default": "claude",
+          "description": "Path or command name of the Claude Code executable."
+        },
+        "sbcClaude.notifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native OS notification when Claude Code finishes responding."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.js",
+    "vscode:prepublish": "node esbuild.js --production",
+    "typecheck": "tsc --noEmit -p .",
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/xterm": "^5.5.0"
+  }
+}

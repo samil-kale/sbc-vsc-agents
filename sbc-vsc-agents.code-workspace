@@ -1,0 +1,57 @@
+{
+	"folders": [
+		{
+			"name": "sbc-vsc-agents",
+			"path": ".",
+		},
+	],
+	"settings": {
+		"editor.minimap.enabled": true,
+		"files.exclude": {
+			".github": true,
+		},
+		"npm.exclude": "**/dist/**",
+	},
+	"launch": {
+		"version": "0.2.0",
+		"configurations": [
+			{
+				"name": "Run sbc-claude",
+				"type": "extensionHost",
+				"request": "launch",
+				"runtimeExecutable": "${execPath}",
+				"args": ["--extensionDevelopmentPath=${workspaceFolder:sbc-vsc-agents}/sbc-claude-code"],
+				"outFiles": ["${workspaceFolder:sbc-vsc-agents}/sbc-claude-code/dist/**/*.js"],
+				"preLaunchTask": "compile-claude"
+			},
+			{
+				"name": "Run sbc-opencode",
+				"type": "extensionHost",
+				"request": "launch",
+				"runtimeExecutable": "${execPath}",
+				"args": ["--extensionDevelopmentPath=${workspaceFolder:sbc-vsc-agents}/sbc-open-code"],
+				"outFiles": ["${workspaceFolder:sbc-vsc-agents}/sbc-open-code/dist/**/*.js"],
+				"preLaunchTask": "compile-opencode"
+			},
+		],
+	},
+	"tasks": {
+		"version": "2.0.0",
+		"tasks": [
+			{
+				"label": "compile-claude",
+				"type": "shell",
+				"command": "node esbuild.js",
+				"options": { "cwd": "${workspaceFolder:sbc-vsc-agents}/sbc-claude-code" },
+				"problemMatcher": [],
+			},
+			{
+				"label": "compile-opencode",
+				"type": "shell",
+				"command": "node esbuild.js",
+				"options": { "cwd": "${workspaceFolder:sbc-vsc-agents}/sbc-open-code" },
+				"problemMatcher": [],
+			},
+		],
+	},
+}
