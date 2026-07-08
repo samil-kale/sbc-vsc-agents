@@ -2,7 +2,7 @@
 
 Sidebar terminal for running [opencode](https://opencode.ai) inside VS Code — with session auto-resume built in.
 
-![SBC Open Code sidebar](media/screenshot.png)
+![SBC Open Code sidebar](https://raw.githubusercontent.com/samil-kale/sbc-vsc-agents/HEAD/sbc-open-code/media/screenshot.png)
 
 ## Features
 

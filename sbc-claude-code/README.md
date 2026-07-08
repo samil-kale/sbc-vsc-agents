@@ -2,7 +2,7 @@
 
 [Claude Code](https://docs.claude.com/en/docs/claude-code), docked in your VS Code sidebar instead of buried in a terminal tab — drop in files, paste screenshots, click straight through to files and URLs in the output, and get pulled back the instant Claude needs you.
 
-![SBC Claude Code sidebar](media/screenshot.png)
+![SBC Claude Code sidebar](https://raw.githubusercontent.com/samil-kale/sbc-vsc-agents/HEAD/sbc-claude-code/media/screenshot.png)
 
 ## Features
 
