@@ -2,7 +2,7 @@ import type { IBufferLine, ILink, ILinkProvider, Terminal } from "@xterm/xterm";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
 
-function isModifierHeld(event: MouseEvent | KeyboardEvent): boolean {
+export function isModifierHeld(event: MouseEvent | KeyboardEvent): boolean {
   return isMac ? event.metaKey : event.ctrlKey;
 }
 

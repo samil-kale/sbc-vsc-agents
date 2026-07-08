@@ -5,6 +5,7 @@ import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol";
 import { buildXtermTheme } from "../theme";
 import { createFileLinkProvider } from "./file-links";
 import { createUrlLinkProvider } from "./url-links";
+import { isModifierHeld } from "./link-provider";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: WebviewToHostMessage): void;
@@ -21,14 +22,30 @@ const fontFamily =
   getComputedStyle(document.documentElement).getPropertyValue("--vscode-editor-font-family").trim() ||
   "monospace";
 
+function openUrl(url: string): void {
+  vscode.postMessage({ type: "openUrl", url });
+}
+
 const term = new Terminal({
   fontFamily,
-  theme: buildXtermTheme()
+  theme: buildXtermTheme(),
+  // Governs OSC 8 hyperlinks the CLI itself may emit (as opposed to plain URL text,
+  // which createUrlLinkProvider below matches by regex). Without this, xterm's built-in
+  // OSC 8 handling wins priority over our own link providers (see shared/ui/link-provider.ts)
+  // and opens links via an in-webview window.open(), which VS Code's webview guide warns
+  // is unreliable - route it through the same host-mediated openUrl path instead.
+  linkHandler: {
+    activate(event, text) {
+      if (isModifierHeld(event)) {
+        openUrl(text);
+      }
+    }
+  }
 });
 
 const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
-term.registerLinkProvider(createUrlLinkProvider(term));
+term.registerLinkProvider(createUrlLinkProvider(term, openUrl));
 term.registerLinkProvider(
   createFileLinkProvider(term, (path) => vscode.postMessage({ type: "openFile", path }))
 );

@@ -8,18 +8,6 @@ import { createModifierGatedLinkProvider } from "./link-provider";
 // `"` or `'` as a url.
 const URL_REGEX = /(https?|HTTPS?):[/]{2}[^\s"'!*(){}|\\^<>`]*[^\s"':,.!?{}|\\^~[\]`()<>]/;
 
-function openUrl(uri: string): void {
-  const newWindow = window.open();
-  if (newWindow) {
-    try {
-      newWindow.opener = null;
-    } catch {
-      // no-op, Electron can throw
-    }
-    newWindow.location.href = uri;
-  }
-}
-
-export function createUrlLinkProvider(terminal: Terminal): ILinkProvider {
-  return createModifierGatedLinkProvider(terminal, URL_REGEX, openUrl);
+export function createUrlLinkProvider(terminal: Terminal, onOpenUrl: (url: string) => void): ILinkProvider {
+  return createModifierGatedLinkProvider(terminal, URL_REGEX, onOpenUrl);
 }

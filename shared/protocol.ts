@@ -10,4 +10,5 @@ export type WebviewToHostMessage =
   | { type: "resize"; cols: number; rows: number }
   | { type: "showShiftDropHint" }
   | { type: "dropFile"; name: string; dataBase64: string }
-  | { type: "openFile"; path: string };
+  | { type: "openFile"; path: string }
+  | { type: "openUrl"; url: string };

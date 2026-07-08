@@ -70,6 +70,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
         case "openFile":
           void this.openFile(message.path);
           break;
+        case "openUrl":
+          void this.openUrl(message.url);
+          break;
       }
     });
   }
@@ -85,6 +88,16 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
       await vscode.window.showTextDocument(document, { preview: true });
     } catch {
       void vscode.window.showWarningMessage(`Could not open file: ${rawPath}`);
+    }
+  }
+
+  // Opening external links from inside a webview (e.g. window.open) is unreliable -
+  // VS Code's webview guide recommends delegating to vscode.env.openExternal instead.
+  private async openUrl(rawUrl: string): Promise<void> {
+    try {
+      await vscode.env.openExternal(vscode.Uri.parse(rawUrl));
+    } catch {
+      void vscode.window.showWarningMessage(`Could not open URL: ${rawUrl}`);
     }
   }
 
