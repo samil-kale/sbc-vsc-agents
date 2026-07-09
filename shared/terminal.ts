@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
 
@@ -8,15 +10,46 @@ export interface SpawnOptions {
   env?: Record<string, string>;
 }
 
+const WIN32_NATIVE_EXTENSIONS = [".exe", ".com"];
+
 /**
- * npm-installed CLIs on Windows are typically ".cmd"/".ps1" shims. Neither node-pty's
- * CreateProcess-based spawn nor child_process.spawn apply PATHEXT resolution the way a
- * shell does, so on win32 we route through cmd.exe to resolve and launch the shim
- * reliably. This avoids relying on `shell: true`, which concatenates args into an
- * unescaped command string.
+ * node-pty spawns via CreateProcessW on win32, which does not apply PATHEXT resolution
+ * and cannot launch ".cmd"/".bat"/".ps1" shims directly. Returns the resolved path to a
+ * native executable if one is found (so the caller can spawn it without a shell
+ * wrapper), or undefined if `executable` only resolves to a shim (or can't be resolved
+ * at all), in which case the cmd.exe wrapper is still needed.
  */
+function resolveWin32NativeExecutable(executable: string): string | undefined {
+  const ext = path.extname(executable).toLowerCase();
+  if (WIN32_NATIVE_EXTENSIONS.includes(ext)) {
+    return executable;
+  }
+  if (ext) {
+    return undefined;
+  }
+
+  const dir = path.dirname(executable);
+  const searchDirs = dir !== "." ? [dir] : (process.env.PATH ?? "").split(path.delimiter);
+  for (const searchDir of searchDirs) {
+    for (const nativeExt of WIN32_NATIVE_EXTENSIONS) {
+      const candidate = path.join(searchDir, executable + nativeExt);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 export function resolveCommand(executable: string, args: string[]): { command: string; args: string[] } {
   if (process.platform === "win32") {
+    const native = resolveWin32NativeExecutable(executable);
+    if (native) {
+      return { command: native, args };
+    }
+    // Shim (.cmd/.bat/.ps1) or unresolved: route through cmd.exe to resolve and launch
+    // it reliably. This avoids relying on `shell: true`, which concatenates args into
+    // an unescaped command string.
     return { command: "cmd.exe", args: ["/d", "/s", "/c", executable, ...args] };
   }
   return { command: executable, args };
