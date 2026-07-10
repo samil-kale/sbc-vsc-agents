@@ -15,10 +15,7 @@ body {
   left: 0;
   right: 0;
   bottom: 0;
-  /* FitAddon sizes the terminal to this element's content box, so padding here
-     is respected without extra measuring logic. Left padding matches the scrollbar
-     width below, so the terminal content is centered between both gutters. */
-  padding: 0 0 0 10px;
+  padding: 0 0 0 12px;
 }
 
 /* scrollbar-color/-width reset to auto so the WebKit pseudo-elements below apply

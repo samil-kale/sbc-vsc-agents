@@ -143,7 +143,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}" />
   <title>${this.agent.displayName}</title>
 </head>
-<body>
+<body data-agent="${this.agent.id}">
   <div id="terminal"></div>
   <script nonce="${cspNonce}" src="${scriptUri}"></script>
 </body>
