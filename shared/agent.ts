@@ -14,6 +14,8 @@ export interface NotificationSettings {
 export interface HooksSetup {
   /** Extra CLI args that register the generated hooks. */
   args: string[];
+  /** Extra env vars (defaults - see spawnAgentProcess) needed to register the generated hooks. */
+  env?: Record<string, string>;
   /** Disposed when the extension deactivates. */
   disposable: vscode.Disposable;
 }

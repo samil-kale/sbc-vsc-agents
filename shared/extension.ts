@@ -18,7 +18,7 @@ export function activateAgentExtension(context: vscode.ExtensionContext, agent: 
   const session = new AgentSession(
     settings.agentPath,
     workspaceRoot,
-    agent.env,
+    { ...agent.env, ...hooksSetup?.env },
     {
       onOutput: (data) => provider.post({ type: "output", data }),
       onStatusChange: (status) => provider.post({ type: "status", status })

@@ -44,6 +44,16 @@
           "type": "string",
           "default": "opencode",
           "description": "Path or command name of the OpenCode executable."
+        },
+        "sbcOpenCode.notifyFinished": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native OS notification when OpenCode finishes responding."
+        },
+        "sbcOpenCode.notifyNeedsYou": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a native OS notification when OpenCode is blocked mid-turn and needs you - a permission prompt, a question dialog, or a session error."
         }
       }
     }
