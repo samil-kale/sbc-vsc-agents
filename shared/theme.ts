@@ -33,7 +33,14 @@ export function buildXtermTheme(): ITheme {
     foreground: read("--vscode-editor-foreground")
   };
 
-  for (const [key, cssVar] of Object.entries(ANSI_CSS_VARS)) {
+  // opencode's TUI assigns blue/magenta the other way round than VS Code's terminal
+  // theme does - swap them here so its output uses the color the user actually themed.
+  const ansiCssVars =
+    document.body.dataset.agent === "opencode"
+      ? { ...ANSI_CSS_VARS, blue: ANSI_CSS_VARS.magenta, magenta: ANSI_CSS_VARS.blue }
+      : ANSI_CSS_VARS;
+
+  for (const [key, cssVar] of Object.entries(ansiCssVars)) {
     (theme as Record<string, string | undefined>)[key] = read(cssVar);
   }
 
