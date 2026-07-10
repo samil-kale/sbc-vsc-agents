@@ -59,10 +59,12 @@ document.documentElement.addEventListener("mouseenter", () => {
 });
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  // The CLI itself already pastes clipboard text on a right click (it sees the
-  // right mouse button through xterm's mouse reporting) - only handle the image
-  // case here, or plain text would get inserted twice.
-  void pasteFromClipboard(true);
+  // Claude Code's CLI already pastes clipboard text on a right click itself (it sees
+  // the right mouse button through xterm's mouse reporting) - skip the plain-text case
+  // there, or it would get inserted twice. opencode's TUI has no such handling, so we
+  // have to paste plain text ourselves for it.
+  const skipPlainText = document.body.dataset.agent === "claude";
+  void pasteFromClipboard(skipPlainText);
 });
 
 // VS Code disables a webview's iframe (pointer-events: none) for the duration of any
@@ -136,7 +138,7 @@ term.onData((data) => {
 // A pasted image (e.g. a copied screenshot) has no filesystem path either - same
 // as a dropped file, hand its content to the extension host so it can save it to
 // a temp file and type the resulting path. Falls back to plain text otherwise.
-async function pasteFromClipboard(isRightClick: boolean): Promise<void> {
+async function pasteFromClipboard(skipPlainText: boolean): Promise<void> {
   const items = await navigator.clipboard.read();
   for (const item of items) {
     const imageType = item.types.find((type) => type.startsWith("image/"));
@@ -152,7 +154,7 @@ async function pasteFromClipboard(isRightClick: boolean): Promise<void> {
       return;
     }
   }
-  if (!isRightClick) {
+  if (!skipPlainText) {
     term.paste(await navigator.clipboard.readText());
   }
 }
