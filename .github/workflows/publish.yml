@@ -1,4 +1,4 @@
-name: Publish sbc-claude-code
+name: Publish extensions
 
 on:
   push:
@@ -8,6 +8,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - sbc-claude-code
+          - sbc-open-code
     steps:
       - uses: actions/checkout@v4
 
@@ -18,6 +23,6 @@ jobs:
       - run: npm ci
 
       - run: npx vsce publish --no-dependencies -p "$VSCE_PAT"
-        working-directory: sbc-claude-code
+        working-directory: ${{ matrix.package }}
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
