@@ -54,4 +54,11 @@
 			},
 		],
 	},
+	"extensions": {
+		"recommendations": [
+			"samil-kale.sbc-claude",
+			"samil-kale.sbc-opencode",
+			"dbaeumer.vscode-eslint",
+		]
+	},
 }
