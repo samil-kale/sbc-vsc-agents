@@ -59,12 +59,14 @@ document.documentElement.addEventListener("mouseenter", () => {
 });
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  // Claude Code's CLI already pastes clipboard text on a right click itself (it sees
-  // the right mouse button through xterm's mouse reporting) - skip the plain-text case
-  // there, or it would get inserted twice. opencode's TUI has no such handling, so we
-  // have to paste plain text ourselves for it.
-  const skipPlainText = document.body.dataset.agent === "claude";
-  void pasteFromClipboard(skipPlainText);
+  // Both CLIs already act on the right mouse button themselves (through xterm's mouse
+  // reporting) - Claude Code's CLI pastes, opencode's copies the current selection - and
+  // the webview has no reliable way to tell which one just happened (opencode manages its
+  // own selection state internally, invisible to xterm.js/term.hasSelection()). Handling
+  // plain text ourselves here would risk clobbering an opencode copy with a paste of stale
+  // clipboard content, so leave plain text alone for every agent; only the image case still
+  // needs handling here, since no CLI can paste an image from its own right-click handling.
+  void pasteFromClipboard(true);
 });
 
 // VS Code disables a webview's iframe (pointer-events: none) for the duration of any
