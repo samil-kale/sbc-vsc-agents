@@ -66,6 +66,10 @@ export function spawnAgentProcess(executable: string, args: string[], options: S
     cols: options.cols,
     rows: options.rows,
     cwd: options.cwd,
-    env
+    env,
+    // Windows-only field (node-pty ignores it on Linux/macOS): use the OpenConsole/conpty.dll
+    // shipped with node-pty instead of the one built into Windows - the same one VS Code's own
+    // integrated terminal uses, and more actively maintained than the inbox conhost.exe.
+    useConptyDll: true
   });
 }
