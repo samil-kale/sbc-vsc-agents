@@ -9,6 +9,7 @@ const CONTEXT_FILE_BOM = process.platform === "win32" ? "\uFEFF" : "";
 const MAX_SELECTION_CHARS = 4000;
 const MAX_DIAGNOSTICS = 20;
 const MAX_TABS = 15;
+const MAX_DEBUG_ERROR_CHARS = 4000;
 
 /**
  * Builds the UserPromptSubmit-hook command that prints the live IDE context file —
@@ -41,6 +42,9 @@ export function buildReadContextCommand(storageDir: string, contextFile: string)
 export class IdeContextTracker implements vscode.Disposable {
   private readonly disposables: vscode.Disposable[] = [];
   private writeTimer: NodeJS.Timeout | undefined;
+  private lastEditor: vscode.TextEditor | undefined;
+  private debugErrors = "";
+  private debugSessionLabel: string | undefined;
 
   constructor(private readonly contextFile: string) {
     this.disposables.push(
@@ -57,8 +61,35 @@ export class IdeContextTracker implements vscode.Disposable {
         }
       }),
       // Fires on tab open/close and on dirty-state changes.
-      vscode.window.tabGroups.onDidChangeTabs(() => this.scheduleWrite())
+      vscode.window.tabGroups.onDidChangeTabs(() => this.scheduleWrite()),
+      // Resets the debug error buffer per run, so stale errors from a previous
+      // session don't linger. Sessions running concurrently (e.g. a compound
+      // launch) share one buffer, so starting a second session also clears the
+      // first's errors - accepted for simplicity, that's an uncommon setup.
+      vscode.debug.onDidStartDebugSession((session) => {
+        this.debugErrors = "";
+        this.debugSessionLabel = `${session.name} (${session.type})`;
+        this.scheduleWrite();
+      }),
+      vscode.debug.registerDebugAdapterTrackerFactory("*", {
+        createDebugAdapterTracker: (session) => ({
+          onDidSendMessage: (message) => this.onDebugMessage(session, message)
+        })
+      })
     );
+    this.scheduleWrite();
+  }
+
+  private onDebugMessage(session: vscode.DebugSession, message: unknown): void {
+    const event = message as { type?: string; event?: string; body?: { category?: string; output?: string } };
+    if (event.type !== "event" || event.event !== "output" || event.body?.category !== "stderr") {
+      return;
+    }
+    this.debugSessionLabel = `${session.name} (${session.type})`;
+    this.debugErrors += event.body.output ?? "";
+    if (this.debugErrors.length > MAX_DEBUG_ERROR_CHARS) {
+      this.debugErrors = this.debugErrors.slice(-MAX_DEBUG_ERROR_CHARS);
+    }
     this.scheduleWrite();
   }
 
@@ -74,13 +105,14 @@ export class IdeContextTracker implements vscode.Disposable {
 
   private write(): void {
     const editor = vscode.window.activeTextEditor;
-    // No active file editor (e.g. focus is on the sidebar terminal): keep the last
-    // known state instead of wiping it, matching the official extension's behavior.
-    if (!editor || editor.document.uri.scheme !== "file") {
-      return;
+    if (editor && editor.document.uri.scheme === "file") {
+      this.lastEditor = editor;
     }
     fs.promises
-      .writeFile(this.contextFile, CONTEXT_FILE_BOM + renderContext(editor))
+      .writeFile(
+        this.contextFile,
+        CONTEXT_FILE_BOM + renderContext(this.lastEditor, this.debugErrors, this.debugSessionLabel)
+      )
       .catch((error) => console.error("[sbc] failed to write ide context:", error));
   }
 
@@ -94,29 +126,36 @@ export class IdeContextTracker implements vscode.Disposable {
   }
 }
 
-function renderContext(editor: vscode.TextEditor): string {
-  const document = editor.document;
-  const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-  const cursor = editor.selection.active;
+function renderContext(
+  editor: vscode.TextEditor | undefined,
+  debugErrors: string,
+  debugSessionLabel: string | undefined
+): string {
+  const lines = ["<ide_context>"];
 
-  const lines = [
-    "<ide_context>",
-    `Active file: ${relativePath} (${document.languageId})`,
-    `Cursor: line ${cursor.line + 1}, column ${cursor.character + 1}`
-  ];
+  if (editor) {
+    const document = editor.document;
+    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
+    const cursor = editor.selection.active;
 
-  if (!editor.selection.isEmpty) {
-    const selection = editor.selection;
-    let text = document.getText(selection);
-    if (text.length > MAX_SELECTION_CHARS) {
-      text = `${text.slice(0, MAX_SELECTION_CHARS)}\n... [selection truncated]`;
-    }
     lines.push(
-      `Selection (lines ${selection.start.line + 1}-${selection.end.line + 1}):`,
-      "```" + document.languageId,
-      text,
-      "```"
+      `Active file: ${relativePath} (${document.languageId})`,
+      `Cursor: line ${cursor.line + 1}, column ${cursor.character + 1}`
     );
+
+    if (!editor.selection.isEmpty) {
+      const selection = editor.selection;
+      let text = document.getText(selection);
+      if (text.length > MAX_SELECTION_CHARS) {
+        text = `${text.slice(0, MAX_SELECTION_CHARS)}\n... [selection truncated]`;
+      }
+      lines.push(
+        `Selection (lines ${selection.start.line + 1}-${selection.end.line + 1}):`,
+        "```" + document.languageId,
+        text,
+        "```"
+      );
+    }
   }
 
   const tabFiles: { path: string; isDirty: boolean }[] = [];
@@ -146,19 +185,33 @@ function renderContext(editor: vscode.TextEditor): string {
     }
   }
 
-  const diagnostics = vscode.languages.getDiagnostics(document.uri);
-  if (diagnostics.length > 0) {
-    lines.push(`Diagnostics for ${relativePath}:`);
-    for (const diagnostic of diagnostics.slice(0, MAX_DIAGNOSTICS)) {
-      const severity = vscode.DiagnosticSeverity[diagnostic.severity];
-      const source = diagnostic.source ? ` [${diagnostic.source}]` : "";
-      lines.push(
-        `- ${severity}${source} line ${diagnostic.range.start.line + 1}: ${diagnostic.message}`
-      );
+  if (editor) {
+    const document = editor.document;
+    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
+    const diagnostics = vscode.languages.getDiagnostics(document.uri);
+    if (diagnostics.length > 0) {
+      lines.push(`Diagnostics for ${relativePath}:`);
+      for (const diagnostic of diagnostics.slice(0, MAX_DIAGNOSTICS)) {
+        const severity = vscode.DiagnosticSeverity[diagnostic.severity];
+        const source = diagnostic.source ? ` [${diagnostic.source}]` : "";
+        lines.push(
+          `- ${severity}${source} line ${diagnostic.range.start.line + 1}: ${diagnostic.message}`
+        );
+      }
+      if (diagnostics.length > MAX_DIAGNOSTICS) {
+        lines.push(`- ... and ${diagnostics.length - MAX_DIAGNOSTICS} more`);
+      }
     }
-    if (diagnostics.length > MAX_DIAGNOSTICS) {
-      lines.push(`- ... and ${diagnostics.length - MAX_DIAGNOSTICS} more`);
-    }
+  }
+
+  if (debugErrors) {
+    const truncated = debugErrors.length >= MAX_DEBUG_ERROR_CHARS;
+    lines.push(
+      `Recent debug session errors (stderr) - ${debugSessionLabel}:`,
+      "```",
+      (truncated ? "... [truncated, showing most recent]\n" : "") + debugErrors,
+      "```"
+    );
   }
 
   lines.push(
