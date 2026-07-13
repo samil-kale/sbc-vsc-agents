@@ -2,11 +2,11 @@
 
 ## Project
 
-sbc — VS Code extensions (`sbc-claude`, `sbc-opencode`, and the in-progress `sbc-pi-code`)
-that show a sidebar with an xterm.js terminal, connected via node-pty to the respective CLI
-agent (`claude` / `opencode`). Almost all logic lives in `shared/` (session, terminal
-spawning, webview, theme, prompt-context hook); `sbc-claude-code/`, `sbc-open-code/`, and
-`sbc-pi-code/` are thin entry points plus packaging config.
+sbc — VS Code extensions (`sbc-claude`, `sbc-opencode`) that show a sidebar with an
+xterm.js terminal, connected via node-pty to the respective CLI agent (`claude` /
+`opencode`). Almost all logic lives in `shared/` (session, terminal spawning, webview,
+theme, prompt-context hook); `sbc-claude-code/` and `sbc-open-code/` are thin entry
+points plus packaging config.
 
 ## Agent-specific vs. shared code
 
