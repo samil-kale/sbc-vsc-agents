@@ -13,8 +13,8 @@ about your workspace. sbc closes that gap:
 - **Native terminal, not a clone** — full `xterm.js` rendering, real PTY, no reimplemented
   input handling or missing escape sequences.
 - **IDE context, automatically** — a `UserPromptSubmit` hook feeds the agent your active file,
-  cursor position, open tabs, and diagnostics with every prompt, so it knows what you're
-  looking at without being told.
+  cursor position, open tabs, diagnostics, and recent debug session errors with every prompt,
+  so it knows what you're looking at without being told.
 - **Matches your VS Code theme** — the terminal picks up your color theme instead of showing
   up as a mismatched black box.
 - **OS notifications** — get notified when the agent finishes responding or is blocked waiting
