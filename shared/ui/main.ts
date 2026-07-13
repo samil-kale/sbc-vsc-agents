@@ -1,6 +1,7 @@
 import "@xterm/xterm/css/xterm.css";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { ClipboardAddon } from "@xterm/addon-clipboard";
 import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol";
 import { buildXtermTheme } from "../theme";
 import { createFileLinkProvider } from "./file-links";
@@ -45,6 +46,10 @@ const term = new Terminal({
 
 const fitAddon = new FitAddon();
 term.loadAddon(fitAddon);
+// CLIs that support "select to copy" (e.g. Claude Code) report the selection back via
+// an OSC 52 escape sequence rather than relying on the browser's own text selection.
+// xterm.js ignores OSC 52 without this addon, so the CLI's copy silently goes nowhere.
+term.loadAddon(new ClipboardAddon());
 term.registerLinkProvider(createUrlLinkProvider(term, openUrl));
 term.registerLinkProvider(
   createFileLinkProvider(term, (path) => vscode.postMessage({ type: "openFile", path }))
