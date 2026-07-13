@@ -2,7 +2,7 @@
   "name": "sbc-claude",
   "displayName": "SBC Claude Code",
   "description": "Sidebar terminal for running Claude Code inside VS Code.",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "publisher": "samil-kale",
   "license": "MIT",
   "repository": {
