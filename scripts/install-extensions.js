@@ -18,6 +18,11 @@ function findVsix(dir) {
 
 for (const dirName of extensionDirs) {
   const dir = path.join(__dirname, "..", dirName);
+  // Old .vsix files accumulate across version bumps (vsce only overwrites the
+  // identically named one) - clear them so only the freshly packaged file remains.
+  for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".vsix"))) {
+    fs.unlinkSync(path.join(dir, file));
+  }
   execSync("npm run package", { cwd: dir, stdio: "inherit" });
   const vsixPath = findVsix(dir);
   execSync(`code --install-extension "${vsixPath}" --force`, { stdio: "inherit" });
