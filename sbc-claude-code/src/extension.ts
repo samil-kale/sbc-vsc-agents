@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { activateAgentExtension } from "@shared/extension";
 import { setupClaudeHooks } from "./claude-hooks";
-import { claudeResumeArgs } from "./resume";
+import { claudeSessionProvider } from "./sessions";
 
 export function activate(context: vscode.ExtensionContext): void {
   activateAgentExtension(context, {
@@ -12,7 +12,7 @@ export function activate(context: vscode.ExtensionContext): void {
     settingsPrefix: "sbcClaudeCode",
     env: { EDITOR: "code" },
     setupHooks: setupClaudeHooks,
-    resumeArgs: claudeResumeArgs
+    sessions: claudeSessionProvider
   });
 }
 

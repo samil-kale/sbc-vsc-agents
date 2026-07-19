@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import { activateAgentExtension } from "@shared/extension";
-import { opencodeResumeArgs } from "./resume";
+import { opencodeSessionProvider } from "./sessions";
 import { setupOpencodeHooks } from "./opencode-hooks";
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext): void {
     extensionName: "sbc-opencode",
     settingsPrefix: "sbcOpenCode",
     env: { OPENCODE_TUI_CONFIG: context.asAbsolutePath("resources/tui.json") },
-    resumeArgs: opencodeResumeArgs,
+    sessions: opencodeSessionProvider,
     setupHooks: setupOpencodeHooks
   });
 }

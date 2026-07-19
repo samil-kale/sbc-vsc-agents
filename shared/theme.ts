@@ -29,7 +29,7 @@ export function buildXtermTheme(): ITheme {
   const read = (name: string): string | undefined => styles.getPropertyValue(name).trim() || undefined;
 
   const theme: ITheme = {
-    background: read("--vscode-sideBar-background"),
+    background: read("--vscode-editor-background"),
     foreground: read("--vscode-editor-foreground")
   };
 

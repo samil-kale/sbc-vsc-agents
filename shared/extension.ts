@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { AgentConfig } from "./agent";
-import { AgentSession } from "./session";
+import { AgentSessionManager } from "./session-manager";
 import { AgentViewProvider } from "./webview";
 import { readSettings } from "./settings";
 
@@ -15,18 +15,16 @@ export function activateAgentExtension(context: vscode.ExtensionContext, agent: 
     context.subscriptions.push(hooksSetup.disposable);
   }
 
-  const session = new AgentSession(
-    settings.agentPath,
+  const manager = new AgentSessionManager({
+    agent,
+    agentPath: settings.agentPath,
     workspaceRoot,
-    { ...agent.env, ...hooksSetup?.env },
-    {
-      onOutput: (data) => provider.post({ type: "output", data }),
-      onStatusChange: (status) => provider.post({ type: "status", status })
-    },
-    hooksSetup?.args
-  );
+    env: { ...agent.env, ...hooksSetup?.env },
+    baseArgs: hooksSetup?.args ?? [],
+    post: (message) => provider.post(message)
+  });
 
-  provider.attachSession(session);
+  provider.attachManager(manager);
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(`${agent.extensionName}.view`, provider, {
@@ -34,28 +32,7 @@ export function activateAgentExtension(context: vscode.ExtensionContext, agent: 
     })
   );
 
-  context.subscriptions.push({ dispose: () => session.stop() });
+  context.subscriptions.push({ dispose: () => manager.stopAll() });
 
-  void bootstrap(session, agent, settings.agentPath, workspaceRoot);
-}
-
-async function bootstrap(
-  session: AgentSession,
-  agent: AgentConfig,
-  agentPath: string,
-  workspaceRoot: string
-): Promise<void> {
-  const [installed, resumeArgs] = await Promise.all([
-    session.checkInstalled(),
-    agent.resumeArgs?.(agentPath, workspaceRoot) ?? Promise.resolve([])
-  ]);
-  if (installed) {
-    session.addExtraArgs(resumeArgs);
-  }
-  session.markInstalled(installed);
-  if (!installed) {
-    void vscode.window.showWarningMessage(
-      `${agent.displayName} executable was not found. Install it and reload the window.`
-    );
-  }
+  void manager.bootstrap();
 }

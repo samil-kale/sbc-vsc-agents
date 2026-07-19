@@ -8,6 +8,7 @@ const WRITE_DEBOUNCE_MS = 250;
 const CONTEXT_FILE_BOM = process.platform === "win32" ? "\uFEFF" : "";
 const MAX_SELECTION_CHARS = 4000;
 const MAX_DIAGNOSTICS = 20;
+const MAX_OTHER_DIAGNOSTICS = 10;
 const MAX_TABS = 15;
 const MAX_DEBUG_ERROR_CHARS = 4000;
 
@@ -54,12 +55,7 @@ export class IdeContextTracker implements vscode.Disposable {
           this.scheduleWrite();
         }
       }),
-      vscode.languages.onDidChangeDiagnostics((event) => {
-        const activeUri = vscode.window.activeTextEditor?.document.uri;
-        if (activeUri && event.uris.some((uri) => uri.toString() === activeUri.toString())) {
-          this.scheduleWrite();
-        }
-      }),
+      vscode.languages.onDidChangeDiagnostics(() => this.scheduleWrite()),
       // Fires on tab open/close and on dirty-state changes.
       vscode.window.tabGroups.onDidChangeTabs(() => this.scheduleWrite()),
       // Resets the debug error buffer per run, so stale errors from a previous
@@ -185,22 +181,71 @@ function renderContext(
     }
   }
 
-  if (editor) {
-    const document = editor.document;
-    const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-    const diagnostics = vscode.languages.getDiagnostics(document.uri);
-    if (diagnostics.length > 0) {
-      lines.push(`Diagnostics for ${relativePath}:`);
-      for (const diagnostic of diagnostics.slice(0, MAX_DIAGNOSTICS)) {
-        const severity = vscode.DiagnosticSeverity[diagnostic.severity];
-        const source = diagnostic.source ? ` [${diagnostic.source}]` : "";
-        lines.push(
-          `- ${severity}${source} line ${diagnostic.range.start.line + 1}: ${diagnostic.message}`
-        );
+  const activeRelativePath = editor
+    ? vscode.workspace.asRelativePath(editor.document.uri, false)
+    : undefined;
+  type Problem = { line: number; severity: vscode.DiagnosticSeverity; source?: string; message: string };
+  const activeProblems: Problem[] = [];
+  const otherProblems: (Problem & { relativePath: string })[] = [];
+
+  for (const [uri, diagnostics] of vscode.languages.getDiagnostics()) {
+    if (uri.scheme !== "file") {
+      continue;
+    }
+    const relativePath = vscode.workspace.asRelativePath(uri, false);
+    for (const diagnostic of diagnostics) {
+      if (
+        diagnostic.severity !== vscode.DiagnosticSeverity.Error &&
+        diagnostic.severity !== vscode.DiagnosticSeverity.Warning
+      ) {
+        continue;
       }
-      if (diagnostics.length > MAX_DIAGNOSTICS) {
-        lines.push(`- ... and ${diagnostics.length - MAX_DIAGNOSTICS} more`);
+      const problem: Problem = {
+        line: diagnostic.range.start.line + 1,
+        severity: diagnostic.severity,
+        source: diagnostic.source,
+        message: diagnostic.message
+      };
+      if (relativePath === activeRelativePath) {
+        activeProblems.push(problem);
+      } else {
+        otherProblems.push({ ...problem, relativePath });
       }
+    }
+  }
+
+  if (activeRelativePath && activeProblems.length > 0) {
+    activeProblems.sort((a, b) => a.line - b.line);
+    lines.push(`Problems in ${activeRelativePath}:`);
+    for (const problem of activeProblems.slice(0, MAX_DIAGNOSTICS)) {
+      const severity = vscode.DiagnosticSeverity[problem.severity];
+      const source = problem.source ? ` [${problem.source}]` : "";
+      lines.push(`- ${severity}${source} line ${problem.line}: ${problem.message}`);
+    }
+    if (activeProblems.length > MAX_DIAGNOSTICS) {
+      lines.push(`- ... and ${activeProblems.length - MAX_DIAGNOSTICS} more`);
+    }
+  }
+
+  if (otherProblems.length > 0) {
+    // Errors before warnings, so a flood of warnings elsewhere never crowds out an error.
+    otherProblems.sort((a, b) => {
+      if (a.severity !== b.severity) {
+        return a.severity - b.severity;
+      }
+      if (a.relativePath !== b.relativePath) {
+        return a.relativePath.localeCompare(b.relativePath);
+      }
+      return a.line - b.line;
+    });
+    lines.push("Other problems in workspace:");
+    for (const problem of otherProblems.slice(0, MAX_OTHER_DIAGNOSTICS)) {
+      const severity = vscode.DiagnosticSeverity[problem.severity];
+      const source = problem.source ? ` [${problem.source}]` : "";
+      lines.push(`- ${problem.relativePath}:${problem.line} ${severity}${source} ${problem.message}`);
+    }
+    if (otherProblems.length > MAX_OTHER_DIAGNOSTICS) {
+      lines.push(`- ... and ${otherProblems.length - MAX_OTHER_DIAGNOSTICS} more`);
     }
   }
 

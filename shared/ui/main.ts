@@ -7,6 +7,7 @@ import { buildXtermTheme } from "../theme";
 import { createFileLinkProvider } from "./file-links";
 import { createUrlLinkProvider } from "./url-links";
 import { isModifierHeld } from "./link-provider";
+import { TabBar } from "./tabs";
 
 declare function acquireVsCodeApi(): {
   postMessage(message: WebviewToHostMessage): void;
@@ -14,9 +15,11 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 
-const terminalContainer = document.getElementById("terminal");
-if (!terminalContainer) {
-  throw new Error("Terminal container not found");
+const terminalsContainer = document.getElementById("terminals");
+const tabsElement = document.getElementById("tabs");
+const newTabButton = document.getElementById("new-tab");
+if (!terminalsContainer || !tabsElement || !newTabButton) {
+  throw new Error("Webview containers not found");
 }
 
 const fontFamily =
@@ -27,40 +30,146 @@ function openUrl(url: string): void {
   vscode.postMessage({ type: "openUrl", url });
 }
 
-const term = new Terminal({
-  fontFamily,
-  theme: buildXtermTheme(),
-  // Governs OSC 8 hyperlinks the CLI itself may emit (as opposed to plain URL text,
-  // which createUrlLinkProvider below matches by regex). Without this, xterm's built-in
-  // OSC 8 handling wins priority over our own link providers (see shared/ui/link-provider.ts)
-  // and opens links via an in-webview window.open(), which VS Code's webview guide warns
-  // is unreliable - route it through the same host-mediated openUrl path instead.
-  linkHandler: {
-    activate(event, text) {
-      if (isModifierHeld(event)) {
-        openUrl(text);
-      }
-    }
-  }
+interface TabView {
+  term: Terminal;
+  fitAddon: FitAddon;
+  container: HTMLElement;
+}
+
+const tabViews = new Map<string, TabView>();
+let activeTabId: string | undefined;
+
+function activeView(): TabView | undefined {
+  return activeTabId !== undefined ? tabViews.get(activeTabId) : undefined;
+}
+
+const tabBar = new TabBar(tabsElement, newTabButton, {
+  onSelect: (tabId) => activateTab(tabId),
+  onClose: (tabId) => vscode.postMessage({ type: "closeTab", tabId }),
+  onNew: () => vscode.postMessage({ type: "newTab" })
 });
 
-const fitAddon = new FitAddon();
-term.loadAddon(fitAddon);
-// CLIs that support "select to copy" (e.g. Claude Code) report the selection back via
-// an OSC 52 escape sequence rather than relying on the browser's own text selection.
-// xterm.js ignores OSC 52 without this addon, so the CLI's copy silently goes nowhere.
-term.loadAddon(new ClipboardAddon());
-term.registerLinkProvider(createUrlLinkProvider(term, openUrl));
-term.registerLinkProvider(
-  createFileLinkProvider(term, (path) => vscode.postMessage({ type: "openFile", path }))
-);
-term.open(terminalContainer);
+function createTabView(tabId: string): TabView {
+  const container = document.createElement("div");
+  // "hidden" uses visibility, not display - xterm needs a laid-out element to
+  // measure itself, both at open() and when output arrives for a background tab.
+  container.className = "terminal hidden";
+  terminalsContainer!.appendChild(container);
+
+  const term = new Terminal({
+    fontFamily,
+    theme: buildXtermTheme(),
+    // Bounded: every tab keeps its own live buffer now, not just a single terminal.
+    scrollback: 4000,
+    // Governs OSC 8 hyperlinks the CLI itself may emit (as opposed to plain URL text,
+    // which createUrlLinkProvider below matches by regex). Without this, xterm's built-in
+    // OSC 8 handling wins priority over our own link providers (see shared/ui/link-provider.ts)
+    // and opens links via an in-webview window.open(), which VS Code's webview guide warns
+    // is unreliable - route it through the same host-mediated openUrl path instead.
+    linkHandler: {
+      activate(event, text) {
+        if (isModifierHeld(event)) {
+          openUrl(text);
+        }
+      }
+    }
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  // CLIs that support "select to copy" (e.g. Claude Code) report the selection back via
+  // an OSC 52 escape sequence rather than relying on the browser's own text selection.
+  // xterm.js ignores OSC 52 without this addon, so the CLI's copy silently goes nowhere.
+  term.loadAddon(new ClipboardAddon());
+  term.registerLinkProvider(createUrlLinkProvider(term, openUrl));
+  term.registerLinkProvider(
+    createFileLinkProvider(term, (path) => vscode.postMessage({ type: "openFile", path }))
+  );
+  term.open(container);
+
+  term.onData((data) => {
+    vscode.postMessage({ type: "input", tabId, data });
+  });
+
+  // xterm can't tell Shift+Enter from plain Enter at the data level - both would
+  // otherwise arrive as the same "\r". Intercept it here and send the same ESC+CR
+  // sequence VS Code's own terminal.sendSequence keybinding uses for "insert newline".
+  // event.repeat is skipped: holding the combo fires repeated keydowns, and flooding
+  // the CLI's escape-sequence parser with back-to-back ESC+CR made it hang/crash.
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type === "keydown" && event.key === "Enter" && event.shiftKey) {
+      // Without these, xterm's hidden input textarea can still insert its own "\n" and
+      // fire a second, separate data event alongside the ESC+CR sent below.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) {
+        vscode.postMessage({ type: "input", tabId, data: "\x1b\r" });
+      }
+      return false;
+    }
+    // xterm's default keydown handling treats Ctrl+V (Cmd+V on macOS) as the literal
+    // control character 0x16 and calls preventDefault() on it - which stops the browser
+    // from ever firing its native paste event, so the clipboard content never gets read.
+    // Intercept it here and paste explicitly via the Clipboard API instead.
+    if (event.type === "keydown" && event.key.toLowerCase() === "v" && isModifierHeld(event) && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) {
+        void pasteFromClipboard(false);
+      }
+      return false;
+    }
+    return true;
+  });
+
+  const view: TabView = { term, fitAddon, container };
+  tabViews.set(tabId, view);
+  return view;
+}
+
+function ensureTabView(tabId: string): TabView {
+  return tabViews.get(tabId) ?? createTabView(tabId);
+}
+
+function disposeTabView(tabId: string): void {
+  const view = tabViews.get(tabId);
+  if (!view) {
+    return;
+  }
+  tabViews.delete(tabId);
+  view.term.dispose();
+  view.container.remove();
+}
+
+function syncActiveStatus(): void {
+  const status = activeTabId !== undefined ? tabBar.getTab(activeTabId)?.status : undefined;
+  document.body.dataset.sessionStatus = status ?? "missing";
+}
+
+function activateTab(tabId: string): void {
+  if (!tabBar.has(tabId)) {
+    return;
+  }
+  activeView()?.container.classList.add("hidden");
+  activeTabId = tabId;
+  tabBar.setActive(tabId);
+  const view = ensureTabView(tabId);
+  // Unhide before fitting - FitAddon can't measure invisible dimensions reliably
+  // while the container was mounted at a stale size.
+  view.container.classList.remove("hidden");
+  view.fitAddon.fit();
+  // The first resize a tab's session receives is what starts its pty (lazy spawn).
+  vscode.postMessage({ type: "resize", tabId, cols: view.term.cols, rows: view.term.rows });
+  vscode.postMessage({ type: "selectTab", tabId });
+  syncActiveStatus();
+  view.term.focus();
+}
 
 // Focus the terminal as soon as the pointer enters the webview, so the sidebar
 // behaves like VS Code's own integrated terminal: hovering it is enough to start
 // typing, no click required first.
 document.documentElement.addEventListener("mouseenter", () => {
-  term.focus();
+  activeView()?.term.focus();
 });
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
@@ -135,12 +244,11 @@ document.addEventListener("drop", (event) => {
 // canvas on its own. VS Code writes the --vscode-* variables as an inline style on
 // <html>; re-apply the theme whenever that changes.
 new MutationObserver(() => {
-  term.options.theme = buildXtermTheme();
+  const theme = buildXtermTheme();
+  for (const view of tabViews.values()) {
+    view.term.options.theme = theme;
+  }
 }).observe(document.documentElement, { attributes: true, attributeFilter: ["style"] });
-
-term.onData((data) => {
-  vscode.postMessage({ type: "input", data });
-});
 
 // A pasted image (e.g. a copied screenshot) has no filesystem path either - same
 // as a dropped file, hand its content to the extension host so it can save it to
@@ -162,70 +270,84 @@ async function pasteFromClipboard(skipPlainText: boolean): Promise<void> {
     }
   }
   if (!skipPlainText) {
-    term.paste(await navigator.clipboard.readText());
+    activeView()?.term.paste(await navigator.clipboard.readText());
   }
-}
-
-// xterm can't tell Shift+Enter from plain Enter at the data level - both would
-// otherwise arrive as the same "\r". Intercept it here and send the same ESC+CR
-// sequence VS Code's own terminal.sendSequence keybinding uses for "insert newline".
-// event.repeat is skipped: holding the combo fires repeated keydowns, and flooding
-// the CLI's escape-sequence parser with back-to-back ESC+CR made it hang/crash.
-term.attachCustomKeyEventHandler((event) => {
-  if (event.type === "keydown" && event.key === "Enter" && event.shiftKey) {
-    // Without these, xterm's hidden input textarea can still insert its own "\n" and
-    // fire a second, separate data event alongside the ESC+CR sent below.
-    event.preventDefault();
-    event.stopPropagation();
-    if (!event.repeat) {
-      vscode.postMessage({ type: "input", data: "\x1b\r" });
-    }
-    return false;
-  }
-  // xterm's default keydown handling treats Ctrl+V (Cmd+V on macOS) as the literal
-  // control character 0x16 and calls preventDefault() on it - which stops the browser
-  // from ever firing its native paste event, so the clipboard content never gets read.
-  // Intercept it here and paste explicitly via the Clipboard API instead.
-  if (event.type === "keydown" && event.key.toLowerCase() === "v" && isModifierHeld(event) && !event.shiftKey) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!event.repeat) {
-      void pasteFromClipboard(false);
-    }
-    return false;
-  }
-  return true;
-});
-
-function sendResize(): void {
-  fitAddon.fit();
-  vscode.postMessage({ type: "resize", cols: term.cols, rows: term.rows });
 }
 
 // ResizeObserver (not window "resize") because docking/undocking the sidebar or
 // resizing its width changes the container size without ever firing a window resize.
 // Debounced: dragging the sidebar edge fires dozens of observations, and each
 // pty.resize forces the TUI into a full redraw, which garbles the scrollback.
+// Only the active tab is resized - background ptys keep their last size and are
+// refit when they get activated again.
 let resizeTimer: ReturnType<typeof setTimeout> | undefined;
 new ResizeObserver(() => {
   clearTimeout(resizeTimer);
-  resizeTimer = setTimeout(sendResize, 100);
-}).observe(terminalContainer);
+  resizeTimer = setTimeout(() => {
+    const view = activeView();
+    if (!view || activeTabId === undefined) {
+      return;
+    }
+    view.fitAddon.fit();
+    vscode.postMessage({ type: "resize", tabId: activeTabId, cols: view.term.cols, rows: view.term.rows });
+  }, 100);
+}).observe(terminalsContainer);
 
 window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) => {
   const message = event.data;
   switch (message.type) {
+    case "tabs": {
+      tabBar.setTabs(message.tabs, message.activeTabId);
+      // Drop views for tabs that no longer exist (idempotent for the common case).
+      for (const tabId of Array.from(tabViews.keys())) {
+        if (!tabBar.has(tabId)) {
+          disposeTabView(tabId);
+        }
+      }
+      activateTab(message.activeTabId);
+      break;
+    }
+    case "tabAdded":
+      tabBar.addTab(message.tab);
+      if (message.activate) {
+        activateTab(message.tab.tabId);
+      }
+      break;
+    case "tabRemoved": {
+      const wasActive = activeTabId === message.tabId;
+      disposeTabView(message.tabId);
+      tabBar.removeTab(message.tabId);
+      if (wasActive) {
+        activeTabId = undefined;
+        if (message.nextActiveTabId !== null) {
+          activateTab(message.nextActiveTabId);
+        } else {
+          syncActiveStatus();
+        }
+      }
+      break;
+    }
+    case "tabUpdated":
+      tabBar.updateTab(message.tab);
+      if (message.tab.tabId === activeTabId) {
+        syncActiveStatus();
+      }
+      break;
     case "output":
-      term.write(message.data);
+      if (tabBar.has(message.tabId)) {
+        ensureTabView(message.tabId).term.write(message.data);
+      }
       break;
     case "status":
-      document.body.dataset.sessionStatus = message.status;
+      tabBar.updateStatus(message.tabId, message.status);
+      if (message.tabId === activeTabId) {
+        syncActiveStatus();
+      }
       break;
     case "pasteText":
-      term.paste(message.text);
+      activeView()?.term.paste(message.text);
       break;
   }
 });
 
 vscode.postMessage({ type: "ready" });
-sendResize();

@@ -9,6 +9,22 @@ export interface SessionCallbacks {
   onStatusChange: (status: SessionStatus) => void;
 }
 
+export function checkAgentInstalled(executable: string, cwd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const { command, args } = resolveCommand(executable, ["--version"]);
+    const check = spawn(command, args, { cwd });
+    let resolved = false;
+    const finish = (installed: boolean) => {
+      if (!resolved) {
+        resolved = true;
+        resolve(installed);
+      }
+    };
+    check.on("error", () => finish(false));
+    check.on("exit", (code) => finish(code === 0));
+  });
+}
+
 export class AgentSession {
   private ptyProcess: IPty | undefined;
   private status: SessionStatus = "missing";
@@ -24,14 +40,6 @@ export class AgentSession {
     private readonly extraArgs: string[] = []
   ) {}
 
-  /**
-   * Appends spawn args that are resolved asynchronously during bootstrap (e.g. session
-   * resume). Must be called before markInstalled() — spawning only happens after that.
-   */
-  addExtraArgs(args: string[]): void {
-    this.extraArgs.push(...args);
-  }
-
   getStatus(): SessionStatus {
     return this.status;
   }
@@ -39,22 +47,6 @@ export class AgentSession {
   private setStatus(status: SessionStatus): void {
     this.status = status;
     this.callbacks.onStatusChange(status);
-  }
-
-  checkInstalled(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const { command, args } = resolveCommand(this.executable, ["--version"]);
-      const check = spawn(command, args, { cwd: this.cwd });
-      let resolved = false;
-      const finish = (installed: boolean) => {
-        if (!resolved) {
-          resolved = true;
-          resolve(installed);
-        }
-      };
-      check.on("error", () => finish(false));
-      check.on("exit", (code) => finish(code === 0));
-    });
   }
 
   markInstalled(installed: boolean): void {

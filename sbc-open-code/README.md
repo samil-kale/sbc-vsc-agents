@@ -6,6 +6,7 @@
 
 ## Features
 
+- **Session tabs** — run multiple opencode sessions side by side in a VS Code-style tab strip: your existing sessions show up as tabs with their titles, the **+** button starts a fresh one, and closing a tab deletes its session.
 - **Sidebar terminal** — opencode runs in a real terminal (xterm.js + node-pty), docked in the sidebar and always one click away — no hunting through terminal tabs.
 - **Paste support** — paste text (Ctrl+V / Cmd+V, or right-click) as usual; paste a screenshot and it's saved to a temp file with the path typed in for you.
 - **Drag & drop** — drag a file straight into the terminal (hold Shift, a VS Code webview restriction) and its path is typed in.

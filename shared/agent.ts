@@ -12,12 +12,35 @@ export interface NotificationSettings {
 }
 
 export interface HooksSetup {
-  /** Extra CLI args that register the generated hooks. */
+  // /** Extra CLI args that register the generated hooks. */
   args: string[];
   /** Extra env vars (defaults - see spawnAgentProcess) needed to register the generated hooks. */
   env?: Record<string, string>;
   /** Disposed when the extension deactivates. */
   disposable: vscode.Disposable;
+}
+
+export interface AgentSessionInfo {
+  /** Agent-native session id (Claude: transcript uuid; opencode: "ses_..."). */
+  id: string;
+  /** Human-readable label; "" allowed - the UI falls back to a placeholder. */
+  title: string;
+  /** Last activity, ms since epoch (Claude: transcript mtime; opencode: `updated`). */
+  updatedAt: number;
+}
+
+/**
+ * Agent-specific session enumeration/resume/deletion. Supplied by the consuming
+ * extension itself, not shared/, since it speaks that agent's own CLI protocol
+ * (Claude: transcript files on disk; opencode: `session list` / `session delete`).
+ */
+export interface SessionProvider {
+  /** All sessions of this workspace, newest first. Must resolve [] on any failure. */
+  list(executable: string, cwd: string): Promise<AgentSessionInfo[]>;
+  /** CLI args that open the given session. */
+  resumeArgs(sessionId: string): string[];
+  /** Permanently deletes the session. Rejects on failure (caller surfaces the error). */
+  remove(executable: string, cwd: string, sessionId: string): Promise<void>;
 }
 
 export interface AgentConfig {
@@ -38,12 +61,6 @@ export interface AgentConfig {
     workspaceRoot: string,
     notifications: NotificationSettings
   ) => HooksSetup;
-  /**
-   * Returns the CLI args that resume the most recent session for the given
-   * workspace, or [] when none exists (or detection fails) - spawning with []
-   * simply starts fresh, so every error path must degrade gracefully. Supplied by
-   * the consuming extension itself, not shared/, since it speaks that agent's own
-   * CLI protocol for finding/resuming sessions.
-   */
-  resumeArgs?: (executable: string, cwd: string) => Promise<string[]>;
+  /** Session enumeration/resume/deletion; missing provider means "no sessions found". */
+  sessions?: SessionProvider;
 }

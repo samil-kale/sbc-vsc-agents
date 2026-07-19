@@ -3,25 +3,175 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
-  background: var(--vscode-sideBar-background);
+  background: var(--vscode-editor-background);
   color: var(--vscode-editor-foreground);
   font-family: var(--vscode-font-family);
   overflow: hidden;
 }
 
-#terminal {
+#tabbar {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
+  /* Matches VS Code's editor tab bar height. */
+  height: 35px;
+  display: flex;
+  align-items: stretch;
+  background: var(--vscode-editorGroupHeader-tabsBackground);
+  border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, transparent);
+}
+
+#tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+#tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 0 10px;
+  max-width: 160px;
+  flex-shrink: 0;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+  background: var(--vscode-tab-inactiveBackground);
+  color: var(--vscode-tab-inactiveForeground);
+  border-right: 1px solid var(--vscode-tab-border, transparent);
+  border-top: 1px solid transparent;
+  border-bottom: 1px solid transparent;
+}
+
+.tab:hover {
+  background: var(--vscode-tab-hoverBackground, var(--vscode-tab-inactiveBackground));
+}
+
+/* Themes mark the active tab with a top accent (e.g. Dark Modern), a bottom
+   underline (tab.activeBorder), or neither - honor whichever is defined, like
+   VS Code itself does. */
+.tab.active {
+  background: var(--vscode-tab-activeBackground);
+  color: var(--vscode-tab-activeForeground);
+  border-top-color: var(--vscode-tab-activeBorderTop, transparent);
+  border-bottom-color: var(--vscode-tab-activeBorder, transparent);
+}
+
+.tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-close {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: inherit;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.tab:hover .tab-close,
+.tab.active .tab-close {
+  visibility: visible;
+}
+
+/* Session status in the close-button slot, like VS Code's dirty indicator: a dot
+   (green = pty running, red = crashed) that turns into the "×" on hover. */
+.tab[data-status="running"] .tab-close,
+.tab[data-status="error"] .tab-close {
+  visibility: visible;
+}
+
+.tab[data-status="running"]:not(:hover) .tab-close,
+.tab[data-status="error"]:not(:hover) .tab-close {
+  color: transparent;
+}
+
+.tab[data-status="running"]:not(:hover) .tab-close::before,
+.tab[data-status="error"]:not(:hover) .tab-close::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.tab[data-status="running"]:not(:hover) .tab-close::before {
+  background: var(--vscode-charts-green);
+}
+
+.tab[data-status="error"]:not(:hover) .tab-close::before {
+  background: var(--vscode-errorForeground);
+}
+
+.tab-close:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+#new-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--vscode-tab-inactiveForeground);
+  width: 20px;
+  height: 20px;
+  align-self: center;
+  margin: 0 4px;
+  padding: 0;
+  border-radius: 3px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+#new-tab:hover {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+#terminals {
+  position: absolute;
+  top: 35px;
+  left: 0;
+  right: 0;
   bottom: 0;
+}
+
+.terminal {
+  position: absolute;
+  inset: 0;
   padding: 0 0 0 12px;
+}
+
+/* visibility (not display): xterm must be able to measure a background tab's
+   laid-out container, both at open() and when output arrives while hidden. */
+.terminal.hidden {
+  visibility: hidden;
 }
 
 /* scrollbar-color/-width reset to auto so the WebKit pseudo-elements below apply
    (Chrome ignores them otherwise) and to drop the classic arrow buttons. The thumb
    itself doesn't render visibly in this webview context, leaving an invisible,
-   arrow-less scrollbar whose track matches the sidebar background. */
+   arrow-less scrollbar whose track matches the terminal background. */
 .xterm-viewport {
   scrollbar-color: auto;
   scrollbar-width: auto;
@@ -32,7 +182,7 @@ body {
 }
 
 .xterm-viewport::-webkit-scrollbar-track {
-  background-color: var(--vscode-sideBar-background);
+  background-color: var(--vscode-editor-background);
 }
 
 .drag-overlay {

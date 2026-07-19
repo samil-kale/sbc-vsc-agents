@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentConfig } from "./agent";
-import type { AgentSession } from "./session";
+import type { AgentSessionManager } from "./session-manager";
 import type { HostToWebviewMessage, WebviewToHostMessage } from "./protocol";
 
 function nonce(): string {
@@ -17,7 +17,7 @@ function nonce(): string {
 
 export class AgentViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
-  private session: AgentSession | undefined;
+  private manager: AgentSessionManager | undefined;
   private ready = false;
   private pendingMessages: HostToWebviewMessage[] = [];
 
@@ -27,8 +27,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
     private readonly workspaceRoot: string
   ) {}
 
-  attachSession(session: AgentSession): void {
-    this.session = session;
+  attachManager(manager: AgentSessionManager): void {
+    this.manager = manager;
   }
 
   resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -50,10 +50,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
           this.onReady();
           break;
         case "input":
-          this.session?.write(message.data);
+          this.manager?.write(message.tabId, message.data);
           break;
         case "resize":
-          this.session?.ensureStarted(message.cols, message.rows);
+          this.manager?.handleResize(message.tabId, message.cols, message.rows);
+          break;
+        case "selectTab":
+          this.manager?.selectTab(message.tabId);
+          break;
+        case "newTab":
+          this.manager?.newTab();
+          break;
+        case "closeTab":
+          void this.manager?.deleteTab(message.tabId);
           break;
         case "showShiftDropHint":
           void vscode.window.showInformationMessage("Hold Shift while dragging to drop files into " + this.agent.displayName);
@@ -118,14 +127,19 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   private onReady(): void {
     this.ready = true;
 
+    // Announce the tabs before flushing buffered messages, so buffered output lands
+    // on tabs the webview already knows about (e.g. after the view was re-resolved
+    // while background ptys kept running). Before bootstrap the snapshot is empty -
+    // the manager's own "tabs" message is in the buffer (or still coming) instead.
+    if (this.manager && this.manager.getTabsSnapshot().length > 0) {
+      this.manager.postTabsSnapshot();
+    }
+
     const buffered = this.pendingMessages;
     this.pendingMessages = [];
     for (const message of buffered) {
       void this.view?.webview.postMessage(message);
     }
-
-    const status = this.session?.getStatus() ?? "missing";
-    this.post({ type: "status", status });
   }
 
   private getHtml(webview: vscode.Webview): string {
@@ -144,7 +158,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   <title>${this.agent.displayName}</title>
 </head>
 <body data-agent="${this.agent.id}">
-  <div id="terminal"></div>
+  <div id="tabbar"><div id="tabs"></div><button id="new-tab" title="New session"></button></div>
+  <div id="terminals"></div>
   <script nonce="${cspNonce}" src="${scriptUri}"></script>
 </body>
 </html>`;
