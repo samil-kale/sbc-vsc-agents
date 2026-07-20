@@ -88,7 +88,13 @@ export class AgentSessionManager {
   }
 
   getTabsSnapshot(): TabDescriptor[] {
-    return this.tabs.map(({ tabId, title, updatedAt, status }) => ({ tabId, title, updatedAt, status }));
+    return this.tabs.map(({ tabId, title, updatedAt, status, continuing }) => ({
+      tabId,
+      title,
+      updatedAt,
+      status,
+      continuing
+    }));
   }
 
   handleResize(tabId: string, cols: number, rows: number): void {
