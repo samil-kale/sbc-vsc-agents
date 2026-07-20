@@ -3,6 +3,7 @@ import type { AgentConfig } from "./agent";
 import { AgentSessionManager } from "./session-manager";
 import { AgentViewProvider } from "./webview";
 import { readSettings } from "./settings";
+import { registerDiagnosticQuickFix } from "./diagnostic-quick-fix";
 
 export function activateAgentExtension(context: vscode.ExtensionContext, agent: AgentConfig): void {
   const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? context.extensionUri.fsPath;
@@ -25,6 +26,8 @@ export function activateAgentExtension(context: vscode.ExtensionContext, agent: 
   });
 
   provider.attachManager(manager);
+
+  registerDiagnosticQuickFix(context, agent, (message) => provider.post(message));
 
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(`${agent.extensionName}.view`, provider, {
