@@ -47,8 +47,8 @@ body {
   background: var(--vscode-tab-inactiveBackground);
   color: var(--vscode-tab-inactiveForeground);
   border-right: 1px solid var(--vscode-tab-border, transparent);
-  border-top: 1px solid transparent;
-  border-bottom: 1px solid transparent;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
 }
 
 .tab:hover {
@@ -92,37 +92,6 @@ body {
   visibility: visible;
 }
 
-/* Session status in the close-button slot, like VS Code's dirty indicator: a dot
-   (green = pty running, red = crashed) that turns into the "×" on hover. */
-.tab[data-status="running"] .tab-close,
-.tab[data-status="error"] .tab-close {
-  visibility: visible;
-}
-
-.tab[data-status="running"]:not(:hover) .tab-close,
-.tab[data-status="error"]:not(:hover) .tab-close {
-  color: transparent;
-}
-
-.tab[data-status="running"]:not(:hover) .tab-close::before,
-.tab[data-status="error"]:not(:hover) .tab-close::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-
-.tab[data-status="running"]:not(:hover) .tab-close::before {
-  background: var(--vscode-charts-green);
-}
-
-.tab[data-status="error"]:not(:hover) .tab-close::before {
-  background: var(--vscode-errorForeground);
-}
-
 .tab-close:hover {
   background: var(--vscode-toolbar-hoverBackground);
 }
@@ -137,7 +106,7 @@ body {
   width: 20px;
   height: 20px;
   align-self: center;
-  margin: 0 4px;
+  margin: 0 8px 0 4px;
   padding: 0;
   border-radius: 3px;
   flex-shrink: 0;

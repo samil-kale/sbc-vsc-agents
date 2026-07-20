@@ -54,9 +54,7 @@ export function setupOpencodeHooks(
   }
 
   const pluginFile = path.join(pluginsDir, "notify.ts");
-  fs.writeFileSync(
-    pluginFile,
-    `import { execSync } from "node:child_process";
+  const pluginContent = `import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 function runNotify(command) {
@@ -94,8 +92,20 @@ export const SbcNotifyPlugin = async () => {
     }
   };
 };
-`
-  );
+`;
+  // opencode pays a large one-time cost (multiple minutes, observed empirically) to
+  // reload/recompile a plugin whenever its file changes - skip the write when the
+  // content already matches, so a VS Code restart with unchanged settings doesn't
+  // retrigger that cost on every activation.
+  let existingPluginContent: string | undefined;
+  try {
+    existingPluginContent = fs.readFileSync(pluginFile, "utf8");
+  } catch {
+    existingPluginContent = undefined;
+  }
+  if (existingPluginContent !== pluginContent) {
+    fs.writeFileSync(pluginFile, pluginContent);
+  }
 
   return {
     args: [],

@@ -39,6 +39,11 @@ export interface SessionProvider {
   list(executable: string, cwd: string): Promise<AgentSessionInfo[]>;
   /** CLI args that open the given session. */
   resumeArgs(sessionId: string): string[];
+  /**
+   * CLI args that resume whichever session was last active, without needing its id -
+   * lets the first tab start spawning immediately instead of waiting on `list()`.
+   */
+  continueArgs(): string[];
   /** Permanently deletes the session. Rejects on failure (caller surfaces the error). */
   remove(executable: string, cwd: string, sessionId: string): Promise<void>;
 }

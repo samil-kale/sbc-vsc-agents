@@ -8,6 +8,8 @@ interface TabState extends TabDescriptor {
   sessionId?: string;
   /** When this tab's pty was spawned - used to claim newly persisted sessions. */
   spawnedAt?: number;
+  /** Bootstrap's active tab, spawned with `continueArgs()` before `list()` resolved. */
+  continuing?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -19,7 +21,12 @@ export interface SessionManagerOptions {
   post: (message: HostToWebviewMessage) => void;
 }
 
-const RECONCILE_AFTER_FIRST_OUTPUT_MS = 5000;
+const RECONCILE_DEBOUNCE_MS = 5000;
+// A tab's CLI can persist a title (e.g. a generated summary) well after its output
+// has gone idle, so one reconcile right after the debounce isn't always enough -
+// keep retrying a few times at the same interval before giving up.
+const RECONCILE_RETRY_MS = 5000;
+const RECONCILE_MAX_RETRIES = 3;
 
 export class AgentSessionManager {
   private tabs: TabState[] = [];
@@ -29,6 +36,7 @@ export class AgentSessionManager {
   private newTabCounter = 0;
   private reconciling: Promise<void> | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  private reconcileRetriesLeft = 0;
   /** Session ids whose removal is still in flight - reconcile must not re-claim them. */
   private readonly deletingSessionIds = new Set<string>();
   /** Tabs already removed from the UI that still need their persisted session claimed for deletion. */
@@ -38,29 +46,40 @@ export class AgentSessionManager {
 
   async bootstrap(): Promise<void> {
     const { agent, agentPath, workspaceRoot } = this.options;
-    const [installed, sessionInfos] = await Promise.all([
-      checkAgentInstalled(agentPath, workspaceRoot),
-      agent.sessions?.list(agentPath, workspaceRoot) ?? Promise.resolve([])
-    ]);
-    this.installed = installed;
-    if (!installed) {
+    // Kick off the session list alongside the (much cheaper) version check instead of
+    // gating the first tab on it - `continueArgs()` resumes whichever session was last
+    // active without needing its id, so that tab can start spawning right away and
+    // adopt its real id/title once the list comes back.
+    const sessionInfosPromise = agent.sessions?.list(agentPath, workspaceRoot) ?? Promise.resolve([]);
+
+    this.installed = await checkAgentInstalled(agentPath, workspaceRoot);
+    if (!this.installed) {
       void vscode.window.showWarningMessage(
         `${agent.displayName} executable was not found. Install it and reload the window.`
       );
     }
 
-    this.tabs = sessionInfos.map((info) => ({
+    const activeTab = this.createPendingTab();
+    activeTab.continuing = agent.sessions !== undefined;
+    this.tabs = [activeTab];
+    this.activeTabId = activeTab.tabId;
+    this.postTabsSnapshot();
+
+    const [mostRecent, ...rest] = await sessionInfosPromise;
+    activeTab.continuing = false;
+    if (mostRecent) {
+      activeTab.sessionId = mostRecent.id;
+      activeTab.title = mostRecent.title;
+      activeTab.updatedAt = mostRecent.updatedAt;
+    }
+    const remainingTabs: TabState[] = rest.map((info) => ({
       tabId: info.id,
       sessionId: info.id,
       title: info.title,
       updatedAt: info.updatedAt,
-      status: installed ? "ready" : "missing"
+      status: this.installed ? "ready" : "missing"
     }));
-    if (this.tabs.length === 0) {
-      this.tabs.push(this.createPendingTab());
-    }
-    // First tab = most recently active session = what `--continue` used to open.
-    this.activeTabId = this.tabs[0].tabId;
+    this.tabs.push(...remainingTabs);
     this.postTabsSnapshot();
   }
 
@@ -70,10 +89,6 @@ export class AgentSessionManager {
 
   getTabsSnapshot(): TabDescriptor[] {
     return this.tabs.map(({ tabId, title, updatedAt, status }) => ({ tabId, title, updatedAt, status }));
-  }
-
-  private hasSessionId(tabId: string): boolean {
-    return this.tabs.some((tab) => tab.tabId === tabId && tab.sessionId !== undefined);
   }
 
   handleResize(tabId: string, cols: number, rows: number): void {
@@ -91,9 +106,13 @@ export class AgentSessionManager {
 
   private startSession(tab: TabState): AgentSession {
     const { agent, agentPath, workspaceRoot, env, baseArgs, post } = this.options;
-    const resumeArgs = tab.sessionId && agent.sessions ? agent.sessions.resumeArgs(tab.sessionId) : [];
+    const resumeArgs =
+      tab.sessionId && agent.sessions
+        ? agent.sessions.resumeArgs(tab.sessionId)
+        : tab.continuing && agent.sessions
+          ? agent.sessions.continueArgs()
+          : [];
     const tabId = tab.tabId;
-    let firstOutputSeen = false;
     const session = new AgentSession(
       agentPath,
       workspaceRoot,
@@ -101,14 +120,11 @@ export class AgentSessionManager {
       {
         onOutput: (data) => {
           post({ type: "output", tabId, data });
-          // A fresh tab's CLI persists its session shortly after producing output -
-          // reconcile once, a bit later, to adopt the real session id and title.
-          if (!firstOutputSeen) {
-            firstOutputSeen = true;
-            if (!this.hasSessionId(tabId)) {
-              this.scheduleReconcile();
-            }
-          }
+          // A tab's CLI persists/updates its session shortly after producing output -
+          // reconcile a bit after output settles to adopt a fresh session id and to
+          // pick up title changes (e.g. once the CLI generates a summary) for tabs
+          // that already have one.
+          this.scheduleReconcile();
         },
         onStatusChange: (status) => {
           const current = this.tabs.find((t) => t.tabId === tabId);
@@ -124,6 +140,8 @@ export class AgentSessionManager {
       [...baseArgs, ...resumeArgs]
     );
     if (!tab.sessionId) {
+      // Also covers the bootstrap "continuing" tab: if it's deleted before bootstrap's
+      // own list() resolves, this lets reconcile() still claim its session for deletion.
       tab.spawnedAt = Date.now();
     }
     this.sessions.set(tabId, session);
@@ -218,10 +236,20 @@ export class AgentSessionManager {
   }
 
   private scheduleReconcile(): void {
+    this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
+    this.armReconcileTimer(RECONCILE_DEBOUNCE_MS);
+  }
+
+  private armReconcileTimer(delayMs: number): void {
     clearTimeout(this.reconcileTimer);
     this.reconcileTimer = setTimeout(() => {
-      void this.reconcile();
-    }, RECONCILE_AFTER_FIRST_OUTPUT_MS);
+      void this.reconcile().then(() => {
+        if (this.reconcileRetriesLeft > 0) {
+          this.reconcileRetriesLeft -= 1;
+          this.armReconcileTimer(RECONCILE_RETRY_MS);
+        }
+      });
+    }, delayMs);
   }
 
   /**
