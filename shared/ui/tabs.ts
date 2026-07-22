@@ -9,8 +9,6 @@ const CLOSE_ICON_SVG =
 const ADD_ICON_SVG =
   '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>';
 
-const CONTINUING_LABEL_PLACEHOLDER = " ".repeat(20);
-
 export interface TabBarCallbacks {
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
@@ -113,10 +111,8 @@ export class TabBar {
         element.dataset.tabId = tab.tabId;
         element.dataset.status = tab.status;
         element.classList.toggle("active", tab.tabId === this.activeTabId);
-        // A "continuing" tab is resuming a not-yet-known session, not a genuinely new
-        // one - pad it instead of showing the misleading "New session" label.
-        const label = tab.continuing ? CONTINUING_LABEL_PLACEHOLDER : tab.title || "New session";
-        const tooltip = tab.continuing ? "" : label;
+        const label = tab.title || "New session";
+        const tooltip = label;
         element.title = tab.updatedAt ? `${tooltip}\nLast activity: ${new Date(tab.updatedAt).toLocaleString()}` : tooltip;
         element.addEventListener("click", () => this.callbacks.onSelect(tab.tabId));
 

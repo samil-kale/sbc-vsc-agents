@@ -8,8 +8,6 @@ interface TabState extends TabDescriptor {
   sessionId?: string;
   /** When this tab's pty was spawned - used to claim newly persisted sessions. */
   spawnedAt?: number;
-  /** Bootstrap's active tab, spawned with `continueArgs()` before `list()` resolved. */
-  continuing?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -18,6 +16,7 @@ export interface SessionManagerOptions {
   workspaceRoot: string;
   env: Record<string, string> | undefined;
   baseArgs: string[];
+  isSessionReady?: (chunk: string, elapsedMs: number) => boolean;
   post: (message: HostToWebviewMessage) => void;
 }
 
@@ -46,32 +45,33 @@ export class AgentSessionManager {
 
   async bootstrap(): Promise<void> {
     const { agent, agentPath, workspaceRoot } = this.options;
-    // Kick off the session list alongside the (much cheaper) version check instead of
-    // gating the first tab on it - `continueArgs()` resumes whichever session was last
-    // active without needing its id, so that tab can start spawning right away and
-    // adopt its real id/title once the list comes back.
+    // Awaited before the first tab is created (rather than raced with it) so the CLI
+    // is only ever resumed by an explicit session id, never with a blind `--continue` -
+    // some agent CLIs mishandle "continue" when there's no session yet.
     const sessionInfosPromise = agent.sessions?.list(agentPath, workspaceRoot) ?? Promise.resolve([]);
 
-    this.installed = await checkAgentInstalled(agentPath, workspaceRoot);
+    const [installed, sessionInfos] = await Promise.all([
+      checkAgentInstalled(agentPath, workspaceRoot),
+      sessionInfosPromise
+    ]);
+    this.installed = installed;
     if (!this.installed) {
       void vscode.window.showWarningMessage(
         `${agent.displayName} executable was not found. Install it and reload the window.`
       );
     }
 
+    const [mostRecent, ...rest] = sessionInfos;
     const activeTab = this.createPendingTab();
-    activeTab.continuing = agent.sessions !== undefined;
-    this.tabs = [activeTab];
-    this.activeTabId = activeTab.tabId;
-    this.postTabsSnapshot();
-
-    const [mostRecent, ...rest] = await sessionInfosPromise;
-    activeTab.continuing = false;
     if (mostRecent) {
       activeTab.sessionId = mostRecent.id;
       activeTab.title = mostRecent.title;
       activeTab.updatedAt = mostRecent.updatedAt;
     }
+    this.tabs = [activeTab];
+    this.activeTabId = activeTab.tabId;
+    this.postTabsSnapshot();
+
     const remainingTabs: TabState[] = rest.map((info) => ({
       tabId: info.id,
       sessionId: info.id,
@@ -88,12 +88,11 @@ export class AgentSessionManager {
   }
 
   getTabsSnapshot(): TabDescriptor[] {
-    return this.tabs.map(({ tabId, title, updatedAt, status, continuing }) => ({
+    return this.tabs.map(({ tabId, title, updatedAt, status }) => ({
       tabId,
       title,
       updatedAt,
-      status,
-      continuing
+      status
     }));
   }
 
@@ -111,14 +110,29 @@ export class AgentSessionManager {
   }
 
   private startSession(tab: TabState): AgentSession {
-    const { agent, agentPath, workspaceRoot, env, baseArgs, post } = this.options;
-    const resumeArgs =
-      tab.sessionId && agent.sessions
-        ? agent.sessions.resumeArgs(tab.sessionId)
-        : tab.continuing && agent.sessions
-          ? agent.sessions.continueArgs()
-          : [];
+    const { agent, agentPath, workspaceRoot, env, baseArgs, isSessionReady, post } = this.options;
+    const resumeArgs = tab.sessionId && agent.sessions ? agent.sessions.resumeArgs(tab.sessionId) : [];
     const tabId = tab.tabId;
+    // isSessionReady is supplied for the lifetime of the window whenever the agent's
+    // setup wants a startup indicator - always (Claude Code) or only while a one-time
+    // cost is still outstanding (opencode's shared plugin dependency install, until it
+    // completes) - every tab spawned while it's set shows it, not just the first. Real
+    // output is forwarded to the terminal live the whole time, underneath the overlay,
+    // rather than held back: some CLIs (opencode included) query the terminal for
+    // capabilities like its background color right at start and expect an answer
+    // within their own short timeout - holding that query back until the overlay hides
+    // would make it arrive far too late.
+    let indicatorActive = isSessionReady !== undefined;
+    const startedAt = Date.now();
+    if (indicatorActive) {
+      post({ type: "startupNotice", tabId, show: true });
+    }
+    const hideIndicator = () => {
+      if (indicatorActive) {
+        indicatorActive = false;
+        post({ type: "startupNotice", tabId, show: false });
+      }
+    };
     const session = new AgentSession(
       agentPath,
       workspaceRoot,
@@ -126,6 +140,9 @@ export class AgentSessionManager {
       {
         onOutput: (data) => {
           post({ type: "output", tabId, data });
+          if (indicatorActive && isSessionReady && isSessionReady(data, Date.now() - startedAt)) {
+            hideIndicator();
+          }
           // A tab's CLI persists/updates its session shortly after producing output -
           // reconcile a bit after output settles to adopt a fresh session id and to
           // pick up title changes (e.g. once the CLI generates a summary) for tabs
@@ -140,14 +157,15 @@ export class AgentSessionManager {
           post({ type: "status", tabId, status });
           if (status === "stopped" || status === "error") {
             this.scheduleReconcile();
+            // Safety net: the CLI may exit before ever producing enough output to
+            // cross the heuristic above - don't leave the overlay stuck up forever.
+            hideIndicator();
           }
         }
       },
       [...baseArgs, ...resumeArgs]
     );
     if (!tab.sessionId) {
-      // Also covers the bootstrap "continuing" tab: if it's deleted before bootstrap's
-      // own list() resolves, this lets reconcile() still claim its session for deletion.
       tab.spawnedAt = Date.now();
     }
     this.sessions.set(tabId, session);

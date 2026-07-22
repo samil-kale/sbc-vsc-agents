@@ -34,10 +34,19 @@ interface TabView {
   term: Terminal;
   fitAddon: FitAddon;
   container: HTMLElement;
+  noticeOverlay: HTMLElement;
 }
 
 const tabViews = new Map<string, TabView>();
 let activeTabId: string | undefined;
+
+function showStartupNotice(tabId: string): void {
+  ensureTabView(tabId).noticeOverlay.classList.remove("hidden");
+}
+
+function hideStartupNotice(tabId: string): void {
+  tabViews.get(tabId)?.noticeOverlay.classList.add("hidden");
+}
 
 function activeView(): TabView | undefined {
   return activeTabId !== undefined ? tabViews.get(activeTabId) : undefined;
@@ -122,7 +131,18 @@ function createTabView(tabId: string): TabView {
     return true;
   });
 
-  const view: TabView = { term, fitAddon, container };
+  // Covers the terminal while the agent's own isSessionReady check (see
+  // shared/session-manager.ts and shared/agent.ts) hasn't yet decided the CLI is ready -
+  // real output still flows to the terminal live the whole time, this just visually
+  // hides it until then.
+  const noticeOverlay = document.createElement("div");
+  noticeOverlay.className = "startup-notice hidden";
+  const noticeSpinner = document.createElement("div");
+  noticeSpinner.className = "startup-notice-spinner";
+  noticeOverlay.appendChild(noticeSpinner);
+  container.appendChild(noticeOverlay);
+
+  const view: TabView = { term, fitAddon, container, noticeOverlay };
   tabViews.set(tabId, view);
   return view;
 }
@@ -346,6 +366,13 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
       break;
     case "pasteText":
       activeView()?.term.paste(message.text);
+      break;
+    case "startupNotice":
+      if (message.show) {
+        showStartupNotice(message.tabId);
+      } else {
+        hideStartupNotice(message.tabId);
+      }
       break;
   }
 });

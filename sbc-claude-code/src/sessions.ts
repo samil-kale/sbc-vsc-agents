@@ -42,10 +42,6 @@ export const claudeSessionProvider: SessionProvider = {
     return ["--resume", sessionId];
   },
 
-  continueArgs(): string[] {
-    return ["--continue"];
-  },
-
   async remove(_executable: string, cwd: string, sessionId: string): Promise<void> {
     const projectDir = await findProjectDir(cwd);
     if (!projectDir) {

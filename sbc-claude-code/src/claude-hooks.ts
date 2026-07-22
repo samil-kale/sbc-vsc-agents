@@ -91,5 +91,24 @@ export function setupClaudeHooks(
   const settingsFile = path.join(storageDir, "sbc-hooks-settings.json");
   fs.writeFileSync(settingsFile, JSON.stringify({ hooks }, null, 2));
 
-  return { args: ["--settings", settingsFile], disposable: new IdeContextTracker(contextFile) };
+  return {
+    args: ["--settings", settingsFile],
+    disposable: new IdeContextTracker(contextFile),
+    isSessionReady: createIsSessionReady()
+  };
+}
+
+/**
+ * Tuned empirically: unlike opencode, Claude Code doesn't seem to draw an early
+ * splash/connecting frame before its real UI, so a plain running byte count is enough
+ * - 300 sits comfortably above its small startup handshake (well under 150 bytes) and
+ * below its main UI redraw (roughly 850+ bytes).
+ */
+function createIsSessionReady(): (chunk: string, elapsedMs: number) => boolean {
+  const READY_OUTPUT_THRESHOLD = 300;
+  let outputSoFar = 0;
+  return (chunk) => {
+    outputSoFar += chunk.length;
+    return outputSoFar > READY_OUTPUT_THRESHOLD;
+  };
 }

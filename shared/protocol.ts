@@ -8,8 +8,6 @@ export interface TabDescriptor {
   /** Last activity, ms since epoch; absent for pending "New session" tabs. */
   updatedAt?: number;
   status: SessionStatus;
-  /** Resuming a not-yet-known session (bootstrap's `--continue` tab) - suppresses the "New session" placeholder. */
-  continuing?: boolean;
 }
 
 export type HostToWebviewMessage =
@@ -19,7 +17,8 @@ export type HostToWebviewMessage =
   | { type: "tabUpdated"; tab: TabDescriptor }
   | { type: "output"; tabId: string; data: string }
   | { type: "status"; tabId: string; status: SessionStatus }
-  | { type: "pasteText"; text: string };
+  | { type: "pasteText"; text: string }
+  | { type: "startupNotice"; tabId: string; show: boolean };
 
 export type WebviewToHostMessage =
   | { type: "ready" }

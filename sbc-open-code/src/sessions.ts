@@ -5,7 +5,7 @@ import { resolveCommand } from "@shared/terminal";
 /**
  * opencode manages sessions through its own CLI: `session list --format json` yields
  * `{id, title, updated, ...}` scoped to the cwd's project, `--session <id>` opens one,
- * `--continue` opens the last one without needing its id, `session delete <id>` removes one.
+ * `session delete <id>` removes one.
  */
 export const opencodeSessionProvider: SessionProvider = {
   async list(executable: string, cwd: string): Promise<AgentSessionInfo[]> {
@@ -28,10 +28,6 @@ export const opencodeSessionProvider: SessionProvider = {
 
   resumeArgs(sessionId: string): string[] {
     return ["--session", sessionId];
-  },
-
-  continueArgs(): string[] {
-    return ["--continue"];
   },
 
   async remove(executable: string, cwd: string, sessionId: string): Promise<void> {

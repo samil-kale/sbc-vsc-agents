@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
 import { buildNotifyCommand } from "@shared/os-notify";
 import { IdeContextTracker } from "@shared/ide-context";
@@ -10,11 +11,20 @@ import { IdeContextTracker } from "@shared/ide-context";
  * opencode has no declarative --settings hook file - the equivalent is a plugin (a .ts
  * file under a `plugins/` directory) that subscribes to opencode's event stream and can
  * hook into `chat.message` to inject extra parts into the outgoing message.
- * `OPENCODE_CONFIG_DIR` points opencode at our own storage dir for this, additively
+ * `OPENCODE_CONFIG_DIR` points opencode at our own install dir for this, additively
  * (verified empirically: it does not replace the user's own `.opencode/plugins/` or
  * `~/.config/opencode/plugins/`, and spawnAgentProcess only applies it as a default the
- * user's own env can still override). Everything is scoped to that per-extension storage
+ * user's own env can still override). Everything is scoped to that per-extension install
  * dir - it never touches the workspace or the user's own opencode config.
+ *
+ * The install dir is global (shared across workspaces), not per-workspace: opencode
+ * bun-installs `@opencode-ai/plugin` and its ~20 transitive deps the first time it sees
+ * a plugins/ file in a config dir it doesn't recognize, which takes several seconds to
+ * minutes (network-dependent) - scoping that per workspace means every new project pays
+ * the cost again, while a single shared dir pays it once per machine. `ide-context.md`
+ * and the notify scripts stay in the per-workspace `storageDir` below so concurrently
+ * open workspaces never see each other's IDE context; only the generated plugin file's
+ * name needs to be workspace-unique, since it lives in the shared plugins/ dir.
  *
  * Plugin event handlers are fire-and-forget (opencode does not await them), so the
  * generated plugin must fire the OS notification with execSync, not the async exec -
@@ -28,7 +38,10 @@ export function setupOpencodeHooks(
   notifications: NotificationSettings
 ): HooksSetup {
   const storageDir = (context.storageUri ?? context.globalStorageUri).fsPath;
-  const pluginsDir = path.join(storageDir, "plugins");
+  fs.mkdirSync(storageDir, { recursive: true });
+
+  const installDir = path.join(context.globalStorageUri.fsPath, "opencode-plugins");
+  const pluginsDir = path.join(installDir, "plugins");
   fs.mkdirSync(pluginsDir, { recursive: true });
 
   const contextFile = path.join(storageDir, "ide-context.md");
@@ -53,7 +66,10 @@ export function setupOpencodeHooks(
     );
   }
 
-  const pluginFile = path.join(pluginsDir, "notify.ts");
+  // Workspace-unique name: the plugins/ dir is shared across all workspaces, so each
+  // one's generated plugin needs its own file to avoid colliding with another's.
+  const workspaceHash = crypto.createHash("sha256").update(workspaceRoot).digest("hex").slice(0, 16);
+  const pluginFile = path.join(pluginsDir, `notify-${workspaceHash}.ts`);
   const pluginContent = `import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
@@ -109,7 +125,29 @@ export const SbcNotifyPlugin = async () => {
 
   return {
     args: [],
-    env: { OPENCODE_CONFIG_DIR: storageDir },
-    disposable: new IdeContextTracker(contextFile)
+    env: { OPENCODE_CONFIG_DIR: installDir },
+    disposable: new IdeContextTracker(contextFile),
+    isSessionReady: createIsSessionReady()
+  };
+}
+
+/**
+ * Tuned empirically: opencode draws its own several-KB splash/connecting frame ~1s
+ * after spawn - a plain running byte count can't tell that frame apart from the real,
+ * final UI redraw, since both are multi-KB redraws, so output from the first GRACE_MS
+ * is ignored entirely. Once past that, the real UI redraw arrives as several KB at
+ * once, comfortably above READY_OUTPUT_THRESHOLD - whether or not a first-time plugin
+ * dependency install (which produces no output at all while it runs) happened first.
+ */
+function createIsSessionReady(): (chunk: string, elapsedMs: number) => boolean {
+  const GRACE_MS = 2000;
+  const READY_OUTPUT_THRESHOLD = 4000;
+  let outputSinceGrace = 0;
+  return (chunk, elapsedMs) => {
+    if (elapsedMs <= GRACE_MS) {
+      return false;
+    }
+    outputSinceGrace += chunk.length;
+    return outputSinceGrace > READY_OUTPUT_THRESHOLD;
   };
 }

@@ -18,6 +18,20 @@ export interface HooksSetup {
   env?: Record<string, string>;
   /** Disposed when the extension deactivates. */
   disposable: vscode.Disposable;
+  /**
+   * Set to show a spinner overlay covering a session's terminal until this returns
+   * true, called with each output chunk (and elapsed ms since the session started) as
+   * it arrives. An overlay rather than terminal text so the CLI's real output can keep
+   * flowing to the (hidden) terminal the whole time - some CLIs query the terminal for
+   * capabilities like its background color right at start and need a timely answer,
+   * which withholding output would break.
+   *
+   * There's no actual readiness signal to check instead (no port, no log line, no
+   * flag), so this is necessarily a best-effort guess at the CLI's undocumented output
+   * behavior - keep the guessing logic itself here, in the agent-specific package
+   * (setupOpencodeHooks/setupClaudeHooks), not in shared/, since it's tuned per agent.
+   */
+  isSessionReady?: (chunk: string, elapsedMs: number) => boolean;
 }
 
 export interface AgentSessionInfo {
@@ -39,11 +53,6 @@ export interface SessionProvider {
   list(executable: string, cwd: string): Promise<AgentSessionInfo[]>;
   /** CLI args that open the given session. */
   resumeArgs(sessionId: string): string[];
-  /**
-   * CLI args that resume whichever session was last active, without needing its id -
-   * lets the first tab start spawning immediately instead of waiting on `list()`.
-   */
-  continueArgs(): string[];
   /** Permanently deletes the session. Rejects on failure (caller surfaces the error). */
   remove(executable: string, cwd: string, sessionId: string): Promise<void>;
 }
