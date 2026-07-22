@@ -19,10 +19,12 @@ export interface HooksSetup {
   /** Disposed when the extension deactivates. */
   disposable: vscode.Disposable;
   /**
-   * Set to show a spinner overlay covering a session's terminal until this returns
-   * true, called with each output chunk (and elapsed ms since the session started) as
-   * it arrives. An overlay rather than terminal text so the CLI's real output can keep
-   * flowing to the (hidden) terminal the whole time - some CLIs query the terminal for
+   * A factory (not the predicate itself!) for the "is this session's CLI ready yet"
+   * check - called once per session start so each session gets its own fresh, isolated
+   * predicate instance. The returned predicate is called with each output chunk (and
+   * elapsed ms since that session started) as it arrives; once it returns true, the
+   * progress bar under the sidebar's tab bar hides. The CLI's real output keeps flowing
+   * to the terminal the whole time regardless - some CLIs query the terminal for
    * capabilities like its background color right at start and need a timely answer,
    * which withholding output would break.
    *
@@ -31,7 +33,7 @@ export interface HooksSetup {
    * behavior - keep the guessing logic itself here, in the agent-specific package
    * (setupOpencodeHooks/setupClaudeHooks), not in shared/, since it's tuned per agent.
    */
-  isSessionReady?: (chunk: string, elapsedMs: number) => boolean;
+  createIsSessionReady?: () => (chunk: string, elapsedMs: number) => boolean;
 }
 
 export interface AgentSessionInfo {

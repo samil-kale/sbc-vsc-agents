@@ -112,8 +112,7 @@ export class TabBar {
         element.dataset.status = tab.status;
         element.classList.toggle("active", tab.tabId === this.activeTabId);
         const label = tab.title || "New session";
-        const tooltip = label;
-        element.title = tab.updatedAt ? `${tooltip}\nLast activity: ${new Date(tab.updatedAt).toLocaleString()}` : tooltip;
+        element.title = tab.updatedAt ? `${label}\nLast activity: ${new Date(tab.updatedAt).toLocaleString()}` : label;
         element.addEventListener("click", () => this.callbacks.onSelect(tab.tabId));
 
         const labelElement = document.createElement("span");

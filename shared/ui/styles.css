@@ -22,6 +22,43 @@ body {
   border-bottom: 1px solid var(--vscode-editorGroupHeader-tabsBorder, transparent);
 }
 
+/* Same indeterminate "worm" animation VS Code's own view progress bar uses (e.g. while
+   an npm script task runs), just anchored to our own tab bar instead. */
+#tab-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  overflow: hidden;
+}
+
+#tab-progress.hidden {
+  display: none;
+}
+
+.tab-progress-bit {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  width: 2%;
+  background: var(--vscode-progressBar-background, var(--vscode-focusBorder));
+  animation: tab-progress-loop 2s linear infinite;
+}
+
+@keyframes tab-progress-loop {
+  0% {
+    transform: translateX(0%) scaleX(1);
+  }
+  50% {
+    transform: translateX(2500%) scaleX(3);
+  }
+  100% {
+    transform: translateX(4900%) scaleX(1);
+  }
+}
+
 #tabs {
   display: flex;
   flex: 1;
@@ -106,7 +143,7 @@ body {
   width: 20px;
   height: 20px;
   align-self: center;
-  margin: 0 8px 0 4px;
+  margin: 0 12px 0 4px;
   padding: 0;
   border-radius: 3px;
   flex-shrink: 0;
@@ -135,35 +172,6 @@ body {
    laid-out container, both at open() and when output arrives while hidden. */
 .terminal.hidden {
   visibility: hidden;
-}
-
-.startup-notice {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--vscode-editor-background);
-}
-
-.startup-notice.hidden {
-  display: none;
-}
-
-.startup-notice-spinner {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 4px solid var(--vscode-progressBar-background, var(--vscode-editor-foreground));
-  border-top-color: transparent;
-  animation: startup-notice-spin 0.8s linear infinite;
-}
-
-@keyframes startup-notice-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 /* scrollbar-color/-width reset to auto so the WebKit pseudo-elements below apply

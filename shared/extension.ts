@@ -22,7 +22,7 @@ export function activateAgentExtension(context: vscode.ExtensionContext, agent: 
     workspaceRoot,
     env: { ...agent.env, ...hooksSetup?.env },
     baseArgs: hooksSetup?.args ?? [],
-    isSessionReady: hooksSetup?.isSessionReady,
+    createIsSessionReady: hooksSetup?.createIsSessionReady,
     post: (message) => provider.post(message)
   });
 

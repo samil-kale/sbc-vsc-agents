@@ -5,6 +5,7 @@ import * as crypto from "node:crypto";
 import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
 import { buildNotifyCommand } from "@shared/os-notify";
 import { IdeContextTracker } from "@shared/ide-context";
+import { createByteThresholdCheck } from "@shared/session-ready";
 
 /**
  * Wires up sbc's OpenCode notification and IDE-context integration. Unlike Claude Code,
@@ -127,27 +128,13 @@ export const SbcNotifyPlugin = async () => {
     args: [],
     env: { OPENCODE_CONFIG_DIR: installDir },
     disposable: new IdeContextTracker(contextFile),
-    isSessionReady: createIsSessionReady()
-  };
-}
-
-/**
- * Tuned empirically: opencode draws its own several-KB splash/connecting frame ~1s
- * after spawn - a plain running byte count can't tell that frame apart from the real,
- * final UI redraw, since both are multi-KB redraws, so output from the first GRACE_MS
- * is ignored entirely. Once past that, the real UI redraw arrives as several KB at
- * once, comfortably above READY_OUTPUT_THRESHOLD - whether or not a first-time plugin
- * dependency install (which produces no output at all while it runs) happened first.
- */
-function createIsSessionReady(): (chunk: string, elapsedMs: number) => boolean {
-  const GRACE_MS = 2000;
-  const READY_OUTPUT_THRESHOLD = 4000;
-  let outputSinceGrace = 0;
-  return (chunk, elapsedMs) => {
-    if (elapsedMs <= GRACE_MS) {
-      return false;
-    }
-    outputSinceGrace += chunk.length;
-    return outputSinceGrace > READY_OUTPUT_THRESHOLD;
+    // Tuned empirically: opencode draws its own several-KB splash/connecting frame ~1s
+    // after spawn - a plain running byte count can't tell that frame apart from the
+    // real, final UI redraw, since both are multi-KB redraws, so output from the first
+    // 2s is ignored entirely. Once past that, the real UI redraw arrives as several KB
+    // at once, comfortably above the 4000-byte threshold - whether or not a first-time
+    // plugin dependency install (which produces no output at all while it runs)
+    // happened first.
+    createIsSessionReady: () => createByteThresholdCheck(4000, 2000)
   };
 }

@@ -16,7 +16,7 @@ export interface SessionManagerOptions {
   workspaceRoot: string;
   env: Record<string, string> | undefined;
   baseArgs: string[];
-  isSessionReady?: (chunk: string, elapsedMs: number) => boolean;
+  createIsSessionReady?: () => (chunk: string, elapsedMs: number) => boolean;
   post: (message: HostToWebviewMessage) => void;
 }
 
@@ -33,6 +33,10 @@ export class AgentSessionManager {
   private activeTabId = "";
   private installed = false;
   private newTabCounter = 0;
+  /** How many sessions currently have an active startup indicator - the TabBar's
+   * progress bar is shared across all tabs, so it stays up as long as at least one
+   * session's isSessionReady check hasn't passed yet. */
+  private activeIndicatorCount = 0;
   private reconciling: Promise<void> | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileRetriesLeft = 0;
@@ -44,43 +48,73 @@ export class AgentSessionManager {
   constructor(private readonly options: SessionManagerOptions) {}
 
   async bootstrap(): Promise<void> {
-    const { agent, agentPath, workspaceRoot } = this.options;
-    // Awaited before the first tab is created (rather than raced with it) so the CLI
-    // is only ever resumed by an explicit session id, never with a blind `--continue` -
-    // some agent CLIs mishandle "continue" when there's no session yet.
-    const sessionInfosPromise = agent.sessions?.list(agentPath, workspaceRoot) ?? Promise.resolve([]);
-
-    const [installed, sessionInfos] = await Promise.all([
-      checkAgentInstalled(agentPath, workspaceRoot),
-      sessionInfosPromise
-    ]);
-    this.installed = installed;
-    if (!this.installed) {
-      void vscode.window.showWarningMessage(
-        `${agent.displayName} executable was not found. Install it and reload the window.`
-      );
+    const { agent, agentPath, workspaceRoot, createIsSessionReady } = this.options;
+    // Reserve the indicator for the list/version-check work below too, not just for
+    // the first tab's own CLI startup afterward - without this, that wait (opencode's
+    // `session list` spawns its own CLI call and can take seconds) shows nothing at
+    // all. Released in `finally` and re-acquired by the first tab's own startSession()
+    // moments later; the brief gap between the two is a same-process message
+    // round-trip, not worth the extra bookkeeping to close entirely.
+    const reserveIndicator = createIsSessionReady !== undefined;
+    if (reserveIndicator) {
+      this.acquireIndicator();
     }
+    try {
+      // Awaited before the first tab is created (rather than raced with it) so the CLI
+      // is only ever resumed by an explicit session id, never with a blind `--continue`
+      // - some agent CLIs mishandle "continue" when there's no session yet.
+      const sessionInfosPromise = agent.sessions?.list(agentPath, workspaceRoot) ?? Promise.resolve([]);
 
-    const [mostRecent, ...rest] = sessionInfos;
-    const activeTab = this.createPendingTab();
-    if (mostRecent) {
-      activeTab.sessionId = mostRecent.id;
-      activeTab.title = mostRecent.title;
-      activeTab.updatedAt = mostRecent.updatedAt;
+      const [installed, sessionInfos] = await Promise.all([
+        checkAgentInstalled(agentPath, workspaceRoot),
+        sessionInfosPromise
+      ]);
+      this.installed = installed;
+      if (!this.installed) {
+        void vscode.window.showWarningMessage(
+          `${agent.displayName} executable was not found. Install it and reload the window.`
+        );
+      }
+
+      const [mostRecent, ...rest] = sessionInfos;
+      const activeTab = this.createPendingTab();
+      if (mostRecent) {
+        activeTab.sessionId = mostRecent.id;
+        activeTab.title = mostRecent.title;
+        activeTab.updatedAt = mostRecent.updatedAt;
+      }
+      this.tabs = [activeTab];
+      this.activeTabId = activeTab.tabId;
+      this.postTabsSnapshot();
+
+      const remainingTabs: TabState[] = rest.map((info) => ({
+        tabId: info.id,
+        sessionId: info.id,
+        title: info.title,
+        updatedAt: info.updatedAt,
+        status: this.installed ? "ready" : "missing"
+      }));
+      this.tabs.push(...remainingTabs);
+      this.postTabsSnapshot();
+    } finally {
+      if (reserveIndicator) {
+        this.releaseIndicator();
+      }
     }
-    this.tabs = [activeTab];
-    this.activeTabId = activeTab.tabId;
-    this.postTabsSnapshot();
+  }
 
-    const remainingTabs: TabState[] = rest.map((info) => ({
-      tabId: info.id,
-      sessionId: info.id,
-      title: info.title,
-      updatedAt: info.updatedAt,
-      status: this.installed ? "ready" : "missing"
-    }));
-    this.tabs.push(...remainingTabs);
-    this.postTabsSnapshot();
+  private acquireIndicator(): void {
+    this.activeIndicatorCount += 1;
+    if (this.activeIndicatorCount === 1) {
+      this.options.post({ type: "startupProgress", show: true });
+    }
+  }
+
+  private releaseIndicator(): void {
+    this.activeIndicatorCount -= 1;
+    if (this.activeIndicatorCount === 0) {
+      this.options.post({ type: "startupProgress", show: false });
+    }
   }
 
   postTabsSnapshot(): void {
@@ -110,28 +144,27 @@ export class AgentSessionManager {
   }
 
   private startSession(tab: TabState): AgentSession {
-    const { agent, agentPath, workspaceRoot, env, baseArgs, isSessionReady, post } = this.options;
+    const { agent, agentPath, workspaceRoot, env, baseArgs, createIsSessionReady, post } = this.options;
     const resumeArgs = tab.sessionId && agent.sessions ? agent.sessions.resumeArgs(tab.sessionId) : [];
     const tabId = tab.tabId;
-    // isSessionReady is supplied for the lifetime of the window whenever the agent's
-    // setup wants a startup indicator - always (Claude Code) or only while a one-time
-    // cost is still outstanding (opencode's shared plugin dependency install, until it
-    // completes) - every tab spawned while it's set shows it, not just the first. Real
-    // output is forwarded to the terminal live the whole time, underneath the overlay,
-    // rather than held back: some CLIs (opencode included) query the terminal for
-    // capabilities like its background color right at start and expect an answer
-    // within their own short timeout - holding that query back until the overlay hides
-    // would make it arrive far too late.
-    let indicatorActive = isSessionReady !== undefined;
+    // createIsSessionReady is supplied whenever the agent's setup wants a startup
+    // indicator for every tab spawned, not just the first (each extension decides its
+    // own condition - see setupOpencodeHooks/setupClaudeHooks). Called fresh here (not
+    // once at setup time) so each session's predicate starts counting from zero instead
+    // of carrying over a previous session's already-past-threshold state - see the
+    // rationale on HooksSetup.createIsSessionReady in shared/agent.ts for why output
+    // isn't withheld while the indicator is up.
+    let isSessionReady = createIsSessionReady?.();
     const startedAt = Date.now();
-    if (indicatorActive) {
-      post({ type: "startupNotice", tabId, show: true });
+    if (isSessionReady) {
+      this.acquireIndicator();
     }
     const hideIndicator = () => {
-      if (indicatorActive) {
-        indicatorActive = false;
-        post({ type: "startupNotice", tabId, show: false });
+      if (!isSessionReady) {
+        return;
       }
+      isSessionReady = undefined;
+      this.releaseIndicator();
     };
     const session = new AgentSession(
       agentPath,
@@ -140,7 +173,7 @@ export class AgentSessionManager {
       {
         onOutput: (data) => {
           post({ type: "output", tabId, data });
-          if (indicatorActive && isSessionReady && isSessionReady(data, Date.now() - startedAt)) {
+          if (isSessionReady?.(data, Date.now() - startedAt)) {
             hideIndicator();
           }
           // A tab's CLI persists/updates its session shortly after producing output -

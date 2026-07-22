@@ -18,7 +18,7 @@ export type HostToWebviewMessage =
   | { type: "output"; tabId: string; data: string }
   | { type: "status"; tabId: string; status: SessionStatus }
   | { type: "pasteText"; text: string }
-  | { type: "startupNotice"; tabId: string; show: boolean };
+  | { type: "startupProgress"; show: boolean };
 
 export type WebviewToHostMessage =
   | { type: "ready" }

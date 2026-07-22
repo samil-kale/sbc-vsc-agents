@@ -158,7 +158,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   <title>${this.agent.displayName}</title>
 </head>
 <body data-agent="${this.agent.id}">
-  <div id="tabbar"><div id="tabs"></div><button id="new-tab" title="New session"></button></div>
+  <div id="tabbar">
+    <div id="tabs"></div>
+    <button id="new-tab" title="New session"></button>
+    <div id="tab-progress" class="hidden"><div class="tab-progress-bit"></div></div>
+  </div>
   <div id="terminals"></div>
   <script nonce="${cspNonce}" src="${scriptUri}"></script>
 </body>
