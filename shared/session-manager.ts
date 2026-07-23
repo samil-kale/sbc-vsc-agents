@@ -292,6 +292,37 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * A tab without a sessionId yet has nothing persisted to rename (no transcript file,
+   * no opencode DB row) - silently reverts the webview's optimistic label back to the
+   * placeholder in that case. Same revert-on-failure shape as deleteTab().
+   */
+  async renameTab(tabId: string, title: string): Promise<void> {
+    const tab = this.tabs.find((t) => t.tabId === tabId);
+    if (!tab) {
+      return;
+    }
+    const { agent, agentPath, workspaceRoot } = this.options;
+    if (!tab.sessionId || !agent.sessions) {
+      this.postTabUpdate(tab);
+      return;
+    }
+    const previousTitle = tab.title;
+    try {
+      await agent.sessions.rename(agentPath, workspaceRoot, tab.sessionId, title);
+      tab.title = title.trim();
+    } catch (error) {
+      void vscode.window.showErrorMessage(`Could not rename ${agent.displayName} session: ${String(error)}`);
+      tab.title = previousTitle;
+    }
+    this.postTabUpdate(tab);
+  }
+
+  private postTabUpdate(tab: TabState): void {
+    const { tabId, title, updatedAt, status } = tab;
+    this.options.post({ type: "tabUpdated", tab: { tabId, title, updatedAt, status } });
+  }
+
   private scheduleReconcile(): void {
     this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
     this.armReconcileTimer(RECONCILE_DEBOUNCE_MS);

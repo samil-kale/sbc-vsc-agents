@@ -28,7 +28,7 @@ export const claudeSessionProvider: SessionProvider = {
       return await Promise.all(
         stats.map(async ({ id, filePath, mtime }) => ({
           id,
-          title: await extractTitle(filePath),
+          title: await extractTitle(filePath, id),
           updatedAt: mtime
         }))
       );
@@ -48,6 +48,24 @@ export const claudeSessionProvider: SessionProvider = {
       throw new Error("Claude project directory not found");
     }
     await fs.promises.rm(path.join(projectDir, `${sessionId}.jsonl`));
+  },
+
+  /**
+   * Mirrors Claude Code's own (CLI-flag-less) `/rename` slash command: it persists a
+   * rename as a `custom-title` transcript entry, which - like Claude's own title
+   * resolution - always wins over the derived `ai-title`/`summary`/message fallback.
+   */
+  async rename(_executable: string, cwd: string, sessionId: string, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      throw new Error("title must be non-empty");
+    }
+    const projectDir = await findProjectDir(cwd);
+    if (!projectDir) {
+      throw new Error("Claude project directory not found");
+    }
+    const line = JSON.stringify({ type: "custom-title", customTitle: trimmed, sessionId }) + "\n";
+    await fs.promises.appendFile(path.join(projectDir, `${sessionId}.jsonl`), line);
   }
 };
 
@@ -71,13 +89,25 @@ const TITLE_MAX_LENGTH = 60;
 const TITLE_SCAN_BYTE_LIMIT = 256 * 1024;
 
 /**
- * Streams the transcript's first lines for something label-worthy: a summary entry's
- * text, else the first real user message. Synthetic messages (slash-command XML, meta,
- * subagent sidechains) are skipped. Falls back to "" - the UI shows a placeholder.
+ * Only ever shows a name Claude Code itself actually assigned - never a guess derived
+ * from raw message content. A `custom-title` entry (Claude's own `/rename`) always
+ * wins and is appended at the true end of the file, so it's found via a tail scan
+ * rather than the head window below. Otherwise falls back to Claude's own
+ * auto-generated "ai-title" (what `/resume` shows - re-checked on every occurrence
+ * since a later one supersedes an earlier one), else a "summary" entry (only seen
+ * after `/compact`). Falls back to "" - the UI shows a placeholder - if Claude hasn't
+ * assigned any of these yet.
  */
-async function extractTitle(filePath: string): Promise<string> {
+async function extractTitle(filePath: string, sessionId: string): Promise<string> {
+  const customTitle = await findLastCustomTitle(filePath, sessionId);
+  if (customTitle) {
+    return truncateTitle(customTitle);
+  }
+
   const stream = fs.createReadStream(filePath, { encoding: "utf8", end: TITLE_SCAN_BYTE_LIMIT });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let aiTitle: string | undefined;
+  let summary: string | undefined;
   try {
     for await (const line of lines) {
       let entry: Record<string, unknown>;
@@ -86,15 +116,10 @@ async function extractTitle(filePath: string): Promise<string> {
       } catch {
         continue;
       }
-      if (entry.type === "summary" && typeof entry.summary === "string" && entry.summary.trim()) {
-        return truncateTitle(entry.summary);
-      }
-      if (entry.type !== "user" || entry.isMeta === true || entry.isSidechain === true) {
-        continue;
-      }
-      const text = userMessageText(entry);
-      if (text && !text.startsWith("<")) {
-        return truncateTitle(text);
+      if (entry.type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle.trim()) {
+        aiTitle = entry.aiTitle;
+      } else if (summary === undefined && entry.type === "summary" && typeof entry.summary === "string" && entry.summary.trim()) {
+        summary = entry.summary;
       }
     }
   } catch (error) {
@@ -103,21 +128,42 @@ async function extractTitle(filePath: string): Promise<string> {
     lines.close();
     stream.destroy();
   }
-  return "";
+  const title = aiTitle ?? summary;
+  return title ? truncateTitle(title) : "";
 }
 
-function userMessageText(entry: Record<string, unknown>): string | undefined {
-  const message = entry.message as { content?: unknown } | undefined;
-  const content = message?.content;
-  if (typeof content === "string") {
-    return content.trim();
-  }
-  if (Array.isArray(content)) {
-    const textBlock = content.find(
-      (block): block is { type: string; text: string } =>
-        typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text"
-    );
-    return textBlock?.text.trim();
+/** Reads just the transcript's tail (custom-title is appended at the end, potentially
+ * well past the head window above on a long-running session) and returns the last
+ * custom-title entry found there, if any - matching Claude's own "last one wins". */
+async function findLastCustomTitle(filePath: string, sessionId: string): Promise<string | undefined> {
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(filePath, "r");
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - TITLE_SCAN_BYTE_LIMIT);
+    const buffer = Buffer.alloc(size - start);
+    await handle.read(buffer, 0, buffer.length, start);
+    const lines = buffer.toString("utf8").split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(lines[i]) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (
+        entry.type === "custom-title" &&
+        entry.sessionId === sessionId &&
+        typeof entry.customTitle === "string" &&
+        entry.customTitle.trim()
+      ) {
+        return entry.customTitle;
+      }
+    }
+  } catch (error) {
+    console.error("[sbc] claude custom-title scan failed:", error);
+  } finally {
+    await handle?.close();
   }
   return undefined;
 }

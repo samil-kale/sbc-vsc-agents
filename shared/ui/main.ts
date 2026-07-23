@@ -47,7 +47,8 @@ function activeView(): TabView | undefined {
 const tabBar = new TabBar(tabsElement, newTabButton, {
   onSelect: (tabId) => activateTab(tabId),
   onClose: (tabId) => vscode.postMessage({ type: "closeTab", tabId }),
-  onNew: () => vscode.postMessage({ type: "newTab" })
+  onNew: () => vscode.postMessage({ type: "newTab" }),
+  onRename: (tabId, title) => vscode.postMessage({ type: "renameTab", tabId, title })
 });
 
 function createTabView(tabId: string): TabView {
@@ -168,10 +169,16 @@ function activateTab(tabId: string): void {
 
 // Focus the terminal as soon as the pointer enters the webview, so the sidebar
 // behaves like VS Code's own integrated terminal: hovering it is enough to start
-// typing, no click required first.
+// typing, no click required first. Skipped while renaming a tab - the mouse re-entering
+// the webview (e.g. drifting out and back while the user is still typing) would otherwise
+// steal focus from the rename <input> and abort the rename mid-edit.
 document.documentElement.addEventListener("mouseenter", () => {
+  if (document.activeElement?.classList.contains("tab-rename-input")) {
+    return;
+  }
   activeView()?.term.focus();
 });
+
 document.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   // Both CLIs already act on the right mouse button themselves (through xterm's mouse

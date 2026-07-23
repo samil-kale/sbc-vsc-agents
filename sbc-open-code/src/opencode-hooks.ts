@@ -82,12 +82,20 @@ function runNotify(command) {
   }
 }
 
+// The plugins/ dir is shared across all workspaces (see file header), so opencode loads
+// every workspace's generated plugin regardless of which one actually spawned this
+// process - without this guard, a single event fires notifications (and injects IDE
+// context) from every other open/previously-open workspace's plugin too.
+const SBC_WORKSPACE_ROOT = ${JSON.stringify(workspaceRoot)};
+
 export const SbcNotifyPlugin = async () => {
   return {
     event: async ({ event }) => {
+      if (process.env.SBC_WORKSPACE_ROOT !== SBC_WORKSPACE_ROOT) return;
       ${eventCases.join("\n      ")}
     },
     "chat.message": async (input, output) => {
+      if (process.env.SBC_WORKSPACE_ROOT !== SBC_WORKSPACE_ROOT) return;
       try {
         let text = readFileSync(${JSON.stringify(contextFile)}, "utf8");
         if (text.charCodeAt(0) === 0xfeff) {
@@ -126,7 +134,7 @@ export const SbcNotifyPlugin = async () => {
 
   return {
     args: [],
-    env: { OPENCODE_CONFIG_DIR: installDir },
+    env: { OPENCODE_CONFIG_DIR: installDir, SBC_WORKSPACE_ROOT: workspaceRoot },
     disposable: new IdeContextTracker(contextFile),
     // Tuned empirically: opencode draws its own several-KB splash/connecting frame ~1s
     // after spawn - a plain running byte count can't tell that frame apart from the

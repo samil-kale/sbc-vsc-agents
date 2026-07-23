@@ -57,6 +57,8 @@ export interface SessionProvider {
   resumeArgs(sessionId: string): string[];
   /** Permanently deletes the session. Rejects on failure (caller surfaces the error). */
   remove(executable: string, cwd: string, sessionId: string): Promise<void>;
+  /** Renames the session's persisted title. Rejects on failure (caller surfaces the error). */
+  rename(executable: string, cwd: string, sessionId: string, title: string): Promise<void>;
 }
 
 export interface AgentConfig {

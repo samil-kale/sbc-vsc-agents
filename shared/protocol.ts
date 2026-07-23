@@ -27,6 +27,7 @@ export type WebviewToHostMessage =
   | { type: "selectTab"; tabId: string }
   | { type: "newTab" }
   | { type: "closeTab"; tabId: string }
+  | { type: "renameTab"; tabId: string; title: string }
   | { type: "showShiftDropHint" }
   | { type: "dropFile"; name: string; dataBase64: string }
   | { type: "openFile"; path: string }

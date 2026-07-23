@@ -107,6 +107,18 @@ body {
   text-overflow: ellipsis;
 }
 
+.tab-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  margin: 0;
+}
+
 .tab-close {
   position: relative;
   display: flex;

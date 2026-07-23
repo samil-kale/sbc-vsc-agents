@@ -64,6 +64,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
         case "closeTab":
           void this.manager?.deleteTab(message.tabId);
           break;
+        case "renameTab":
+          void this.manager?.renameTab(message.tabId, message.title);
+          break;
         case "showShiftDropHint":
           void vscode.window.showInformationMessage("Hold Shift while dragging to drop files into " + this.agent.displayName);
           break;

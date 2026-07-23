@@ -13,6 +13,7 @@ export interface TabBarCallbacks {
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
   onNew: () => void;
+  onRename: (tabId: string, title: string) => void;
 }
 
 /**
@@ -23,6 +24,9 @@ export interface TabBarCallbacks {
 export class TabBar {
   private tabs: TabDescriptor[] = [];
   private activeTabId = "";
+  /** At most one tab can be renamed at a time - a second dblclick while one is already
+   * in progress is ignored rather than interrupting the first. */
+  private editingTabId: string | undefined;
 
   constructor(
     private readonly tabsElement: HTMLElement,
@@ -103,7 +107,77 @@ export class TabBar {
     return this.tabs.map((tab) => tab.tabId);
   }
 
+  /** Swaps a tab's label for a real `<input>` while renaming - a contentEditable span
+   * clipped with overflow:hidden loses focus in Chromium once the caret moves past the
+   * visible area, which a native input doesn't (it scrolls its text internally). Enter
+   * or clicking away commits the new title via onRename; Escape reverts without
+   * committing. */
+  private beginRename(tabId: string, labelElement: HTMLElement, currentTitle: string): void {
+    if (this.editingTabId) {
+      return;
+    }
+    this.editingTabId = tabId;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "tab-rename-input";
+    input.maxLength = 50;
+    input.value = currentTitle;
+    // Without this, a click to place the caret bubbles up to the tab's own click
+    // handler (onSelect -> activateTab -> term.focus()), stealing focus right back
+    // from the input and aborting the rename.
+    input.addEventListener("click", (event) => event.stopPropagation());
+    labelElement.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const finish = (commit: boolean) => {
+      this.editingTabId = undefined;
+      input.removeEventListener("keydown", onKeyDown);
+      input.removeEventListener("blur", onBlur);
+      const newTitle = input.value.trim();
+      if (commit && newTitle) {
+        labelElement.textContent = newTitle;
+        // Keep the data model in sync with the optimistic label - the render() below
+        // (and any future render() before the host's tabUpdated echo arrives) rebuilds
+        // from this.tabs, so leaving the old title there would flash it right back.
+        const tab = this.tabs.find((t) => t.tabId === tabId);
+        if (tab) {
+          tab.title = newTitle;
+        }
+      }
+      input.replaceWith(labelElement);
+      if (commit && newTitle && newTitle !== currentTitle) {
+        this.callbacks.onRename(tabId, newTitle);
+      }
+      // Catch up on any tab list/status changes that arrived (and were held back, see
+      // render()) while the rename was in progress.
+      this.render();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.stopPropagation();
+      if (event.key === "Enter") {
+        event.preventDefault();
+        finish(true);
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        finish(false);
+      }
+    };
+    const onBlur = () => finish(true);
+    input.addEventListener("keydown", onKeyDown);
+    input.addEventListener("blur", onBlur);
+  }
+
   private render(): void {
+    if (this.editingTabId) {
+      // replaceChildren() below detaches every existing node before reinserting the new
+      // set - even one that's identical by reference - and detaching a focused element
+      // blurs it. That would abort the in-progress rename via the input's blur handler,
+      // so skip rendering entirely until it finishes (see finish() in beginRename, which
+      // calls render() again to catch up on whatever changed meanwhile).
+      return;
+    }
     this.tabsElement.replaceChildren(
       ...this.tabs.map((tab) => {
         const element = document.createElement("div");
@@ -118,6 +192,10 @@ export class TabBar {
         const labelElement = document.createElement("span");
         labelElement.className = "tab-label";
         labelElement.textContent = label;
+        labelElement.addEventListener("dblclick", (event) => {
+          event.stopPropagation();
+          this.beginRename(tab.tabId, labelElement, tab.title);
+        });
         element.appendChild(labelElement);
 
         const closeElement = document.createElement("button");

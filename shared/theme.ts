@@ -35,6 +35,9 @@ export function buildXtermTheme(): ITheme {
 
   // opencode's TUI assigns blue/magenta the other way round than VS Code's terminal
   // theme does - swap them here so its output uses the color the user actually themed.
+  // Deliberate exception to the shared/agent-specific split (see CLAUDE.md): this is a
+  // single conditional, not a divergent code path, so routing it through the
+  // setupHooks-style callback pattern would be more machinery than the one-liner it guards.
   const ansiCssVars =
     document.body.dataset.agent === "opencode"
       ? { ...ANSI_CSS_VARS, blue: ANSI_CSS_VARS.magenta, magenta: ANSI_CSS_VARS.blue }
