@@ -40,6 +40,13 @@ export const opencodeSessionProvider: SessionProvider = {
    * `session list` reflects it immediately afterward). Since our terminal only ever
    * runs opencode as a plain TUI (no server port to reuse), a short-lived `opencode
    * serve` is spun up just for this one request and torn down right after.
+   *
+   * Known limitation: the already-running TUI for that session (verified: it doesn't
+   * expose a listening port of its own to patch instead) keeps its own in-memory title,
+   * so its `/sessions` command still shows the old name until that TUI process restarts
+   * - even though the DB and any fresh `session list` call already reflect the rename.
+   * Fix this properly once opencode ships its own rename command/notification instead
+   * of working around the missing one.
    */
   async rename(executable: string, cwd: string, sessionId: string, title: string): Promise<void> {
     const trimmed = title.trim();
