@@ -93,7 +93,11 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async openFile(rawPath: string): Promise<void> {
-    const resolvedPath = path.isAbsolute(rawPath) ? rawPath : path.join(this.workspaceRoot, rawPath);
+    const expandedPath =
+      rawPath === "~" || rawPath.startsWith("~/") || rawPath.startsWith("~\\")
+        ? path.join(os.homedir(), rawPath.slice(1))
+        : rawPath;
+    const resolvedPath = path.isAbsolute(expandedPath) ? expandedPath : path.join(this.workspaceRoot, expandedPath);
     if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
       void vscode.window.showWarningMessage(`Could not find file: ${rawPath}`);
       return;

@@ -3,7 +3,8 @@ import { createModifierGatedLinkProvider } from "./link-provider";
 
 // Matches a plausible space-free file-path token. Two shapes:
 //  (A) a path with at least one path separator, e.g. "shared/ui/main.ts",
-//      "./foo/bar.ts", "C:\Users\x\file.txt", "src\extension.ts"
+//      "./foo/bar.ts", "C:\Users\x\file.txt", "src\extension.ts",
+//      "~/.claude/settings.json"
 //  (B) a bare filename with no separator, e.g. "package.json" - stem must be
 //      >=2 chars to reject 1-letter-stem prose artifacts like "e.g"/"i.e".
 // In both shapes the extension must contain at least one letter, which rejects
@@ -14,7 +15,7 @@ import { createModifierGatedLinkProvider } from "./link-provider";
 // the host-side existence check (see shared/webview.ts) is the real safety net,
 // a bogus match just fails to open with a warning.
 const FILE_PATH_REGEX =
-  /(?:(?:[A-Za-z]:[\\/]|\.{1,2}[\\/])(?:[\w@.+-]+[\\/])*|(?:[\w@.+-]+[\\/])+)[\w@+-][\w@.+-]*\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}|[\w@+-]{2,}[\w@.+-]*\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}/;
+  /(?:(?:[A-Za-z]:[\\/]|\.{1,2}[\\/]|~[\\/])(?:[\w@.+-]+[\\/])*|(?:[\w@.+-]+[\\/])+)[\w@+-][\w@.+-]*\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}|[\w@+-]{2,}[\w@.+-]*\.(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{1,10}/;
 
 export function createFileLinkProvider(terminal: Terminal, onOpenFile: (path: string) => void): ILinkProvider {
   return createModifierGatedLinkProvider(terminal, FILE_PATH_REGEX, onOpenFile);
