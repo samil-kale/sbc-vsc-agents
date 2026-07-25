@@ -12,13 +12,13 @@
     "install-extensions": "node scripts/install-extensions.js"
   },
   "devDependencies": {
-    "@eslint/js": "^9.14.0",
-    "@vscode/vsce": "^3.2.0",
+    "@eslint/js": "^10.0.1",
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
-    "eslint": "^9.14.0",
+    "eslint": "^10.0.1",
     "typescript": "^5.6.0",
-    "typescript-eslint": "^8.13.0"
+    "typescript-eslint": "^8.65.0"
   }
 }

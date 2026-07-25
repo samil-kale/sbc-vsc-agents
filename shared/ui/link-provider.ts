@@ -123,8 +123,8 @@ function getWindowedLineStrings(lineIndex: number, terminal: Terminal): [string[
   let line: IBufferLine | undefined;
   let topIdx = lineIndex;
   let bottomIdx = lineIndex;
-  let length = 0;
-  let content = "";
+  let length: number;
+  let content: string;
   const lines: string[] = [];
 
   if ((line = terminal.buffer.active.getLine(lineIndex))) {
