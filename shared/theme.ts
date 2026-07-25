@@ -30,7 +30,12 @@ export function buildXtermTheme(): ITheme {
 
   const theme: ITheme = {
     background: read("--vscode-editor-background"),
-    foreground: read("--vscode-editor-foreground")
+    foreground: read("--vscode-editor-foreground"),
+    // Matches VS Code's own scrollbar slider colors instead of xterm's default
+    // (foreground at 20/40/50% opacity) so the terminal's scrollbar looks native.
+    scrollbarSliderBackground: read("--vscode-scrollbarSlider-background"),
+    scrollbarSliderHoverBackground: read("--vscode-scrollbarSlider-hoverBackground"),
+    scrollbarSliderActiveBackground: read("--vscode-scrollbarSlider-activeBackground")
   };
 
   // opencode's TUI assigns blue/magenta the other way round than VS Code's terminal

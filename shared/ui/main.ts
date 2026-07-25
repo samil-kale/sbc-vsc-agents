@@ -63,6 +63,13 @@ function createTabView(tabId: string): TabView {
     theme: buildXtermTheme(),
     // Bounded: every tab keeps its own live buffer now, not just a single terminal.
     scrollback: 4000,
+    // We hide the scrollbar entirely (see shared/ui/styles.css), but both FitAddon's column
+    // math and xterm's internal Viewport still reserve real pixel width for it, falling back
+    // to a hardcoded 14px via `options.overviewRuler?.width || 14` - leaving a dead gap on the
+    // right where the (now invisible) scrollbar used to sit. overviewRuler is nominally an
+    // unrelated decoration-ruler feature, but its width is what that fallback reuses; `0` won't
+    // work since `0 || 14` still evaluates to 14, so 1px is the smallest reservation possible.
+    overviewRuler: { width: 1 },
     // Governs OSC 8 hyperlinks the CLI itself may emit (as opposed to plain URL text,
     // which createUrlLinkProvider below matches by regex). Without this, xterm's built-in
     // OSC 8 handling wins priority over our own link providers (see shared/ui/link-provider.ts)

@@ -177,7 +177,7 @@ body {
 .terminal {
   position: absolute;
   inset: 0;
-  padding: 0 0 0 12px;
+  padding: 0 0 0 14px;
 }
 
 /* visibility (not display): xterm must be able to measure a background tab's
@@ -186,21 +186,37 @@ body {
   visibility: hidden;
 }
 
-/* scrollbar-color/-width reset to auto so the WebKit pseudo-elements below apply
-   (Chrome ignores them otherwise) and to drop the classic arrow buttons. The thumb
-   itself doesn't render visibly in this webview context, leaving an invisible,
-   arrow-less scrollbar whose track matches the terminal background. */
-.xterm-viewport {
-  scrollbar-color: auto;
-  scrollbar-width: auto;
-}
-
-.xterm-viewport::-webkit-scrollbar {
-  width: 10px;
-}
-
-.xterm-viewport::-webkit-scrollbar-track {
+/* xterm.js 6 renders its own themed scrollbar slider (driven by the
+   scrollbarSlider* ITheme colors, defaulted from `foreground` - see
+   buildXtermTheme in shared/theme.ts) instead of styling the native
+   overflow scrollbar - no CSS override needed here anymore.
+   xterm.css itself still defaults .xterm-viewport to a hardcoded black
+   background (its own comment: "required on OS X for the scroll bar to
+   appear fully opaque") - override it so the gutter next to .terminal's
+   left padding matches the theme instead of showing raw black.
+   .xterm-viewport is also still left with overflow-y: scroll from xterm.css,
+   a leftover from xterm 5 where it held the actual scrollable content -
+   in 6 the real content and scrolling live in .xterm-scrollable-element
+   instead, so .xterm-viewport is always empty now. overflow-y: scroll still
+   forces a native scrollbar track to reserve/capture the same right-edge
+   area the new custom scrollbar renders in, blocking its hover detection -
+   disable it since there's nothing left in here to scroll natively.
+   Matches xterm.css's own ".xterm .xterm-viewport" selector specificity (two
+   classes) so this override actually wins the cascade instead of losing to it
+   despite loading later in the document. */
+.xterm .xterm-viewport {
   background-color: var(--vscode-editor-background);
+  overflow: hidden;
+}
+
+/* The CLIs we host (Claude Code, opencode) render their entire UI in the
+   terminal's alternate screen buffer, which per terminal protocol never has
+   scrollback - so this scrollbar can never have anything to show in practice.
+   Suppress it entirely rather than leave a widget that only ever flashes
+   full-height in edge cases. Matches xterm.css's own 3-class selector
+   specificity so this wins the cascade. */
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
 }
 
 .drag-overlay {
