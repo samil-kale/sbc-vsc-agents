@@ -26,7 +26,8 @@ export type WebviewToHostMessage =
   | { type: "resize"; tabId: string; cols: number; rows: number }
   | { type: "selectTab"; tabId: string }
   | { type: "newTab" }
-  | { type: "closeTab"; tabId: string }
+  /** Always a batch, even for a single tab - the tab context menu closes whole ranges. */
+  | { type: "closeTabs"; tabIds: string[] }
   | { type: "renameTab"; tabId: string; title: string }
   | { type: "showShiftDropHint" }
   | { type: "dropFile"; name: string; dataBase64: string }

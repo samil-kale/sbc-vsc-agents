@@ -46,7 +46,7 @@ function activeView(): TabView | undefined {
 
 const tabBar = new TabBar(tabsElement, newTabButton, {
   onSelect: (tabId) => activateTab(tabId),
-  onClose: (tabId) => vscode.postMessage({ type: "closeTab", tabId }),
+  onClose: (tabIds) => vscode.postMessage({ type: "closeTabs", tabIds }),
   onNew: () => vscode.postMessage({ type: "newTab" }),
   onRename: (tabId, title) => vscode.postMessage({ type: "renameTab", tabId, title })
 });

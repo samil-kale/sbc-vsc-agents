@@ -219,6 +219,52 @@ body {
   display: none;
 }
 
+/* Mirrors VS Code's own context menu (monaco-menu): 13px labels in 2em-high rows,
+   indented left and right for the check-mark and keybinding columns it reserves, on a
+   rounded 1px-bordered surface with the shared widget shadow. */
+.context-menu {
+  position: fixed;
+  /* Above .drag-overlay. */
+  z-index: 1001;
+  min-width: 160px;
+  padding: 4px 0;
+  font-size: 13px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editorWidget-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-editorWidget-border, transparent));
+  border-radius: 5px;
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+
+.context-menu-item {
+  display: flex;
+  align-items: center;
+  height: 2em;
+  padding: 0 26px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.context-menu-item:not(.disabled):hover {
+  background: var(--vscode-menu-selectionBackground);
+  color: var(--vscode-menu-selectionForeground);
+  outline: 1px solid var(--vscode-menu-selectionBorder, transparent);
+  outline-offset: -1px;
+}
+
+/* Same treatment VS Code gives a disabled menu action - dimmed, not recolored. */
+.context-menu-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* VS Code's group separator: a full-width hairline, not an own row. */
+.context-menu-separator {
+  height: 0;
+  margin: 4px 0;
+  border-bottom: 1px solid var(--vscode-menu-separatorBackground, var(--vscode-editorWidget-border, transparent));
+}
+
 .drag-overlay {
   position: fixed;
   inset: 0;

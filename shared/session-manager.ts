@@ -236,29 +236,53 @@ export class AgentSessionManager {
     return { tabId: `new-${this.newTabCounter}`, title: "", status: this.installed ? "ready" : "missing" };
   }
 
-  async deleteTab(tabId: string): Promise<void> {
-    const tab = this.tabs.find((t) => t.tabId === tabId);
-    if (!tab) {
+  /**
+   * Every tab is dropped from the UI up front, before any session is torn down: the
+   * webview answers a removal by activating the next tab, and activating one spawns
+   * its pty (lazy start), so a tab still queued for deletion has to be gone from the
+   * model by the time that answer arrives. The teardown below then runs one tab at a
+   * time, to avoid concurrent CLI calls for listing/removing sessions.
+   */
+  async deleteTabs(tabIds: string[]): Promise<void> {
+    const doomed = new Set(tabIds);
+    const tabs = this.tabs.filter((tab) => doomed.has(tab.tabId));
+    if (tabs.length === 0) {
       return;
     }
 
-    // Optimistic: drop the tab from the UI right away; killing the pty and removing
-    // the persisted session finish in the background below.
-    const index = this.tabs.indexOf(tab);
-    this.tabs.splice(index, 1);
-    const nextActive = this.tabs[index] ?? this.tabs[index - 1];
-    if (this.activeTabId === tabId) {
+    // Optimistic: drop the tabs from the UI right away; killing the ptys and removing
+    // the persisted sessions finish in the background below.
+    const indices = new Map(tabs.map((tab) => [tab.tabId, this.tabs.indexOf(tab)]));
+    const activeIndex = this.tabs.findIndex((tab) => tab.tabId === this.activeTabId);
+    const survivors = this.tabs.filter((tab) => !doomed.has(tab.tabId));
+    // Same rule as VS Code: the closed tab hands over to its nearest neighbour on the
+    // right, or - if it was the rightmost one - on the left.
+    const nextActive = doomed.has(this.activeTabId)
+      ? (survivors.find((tab) => this.tabs.indexOf(tab) > activeIndex) ?? survivors[survivors.length - 1])
+      : undefined;
+    this.tabs = survivors;
+    if (doomed.has(this.activeTabId)) {
       this.activeTabId = nextActive?.tabId ?? "";
     }
-    this.options.post({ type: "tabRemoved", tabId, nextActiveTabId: nextActive?.tabId ?? null });
+    for (const tab of tabs) {
+      this.options.post({ type: "tabRemoved", tabId: tab.tabId, nextActiveTabId: nextActive?.tabId ?? null });
+    }
     if (this.tabs.length === 0) {
       this.newTab();
     }
 
-    const session = this.sessions.get(tabId);
+    for (const tab of tabs) {
+      await this.destroyTab(tab, indices.get(tab.tabId) ?? this.tabs.length);
+    }
+  }
+
+  /** Kills a removed tab's pty and deletes its persisted session; `index` is where the
+   * tab sat before removal, used to put it back if the deletion fails. */
+  private async destroyTab(tab: TabState, index: number): Promise<void> {
+    const session = this.sessions.get(tab.tabId);
     if (session) {
       session.stop();
-      this.sessions.delete(tabId);
+      this.sessions.delete(tab.tabId);
     }
 
     const { agent, agentPath, workspaceRoot } = this.options;
@@ -302,7 +326,7 @@ export class AgentSessionManager {
   /**
    * A tab without a sessionId yet has nothing persisted to rename (no transcript file,
    * no opencode DB row) - silently reverts the webview's optimistic label back to the
-   * placeholder in that case. Same revert-on-failure shape as deleteTab().
+   * placeholder in that case. Same revert-on-failure shape as destroyTab().
    */
   async renameTab(tabId: string, title: string): Promise<void> {
     const tab = this.tabs.find((t) => t.tabId === tabId);

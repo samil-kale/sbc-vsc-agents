@@ -61,8 +61,8 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
         case "newTab":
           this.manager?.newTab();
           break;
-        case "closeTab":
-          void this.manager?.deleteTab(message.tabId);
+        case "closeTabs":
+          void this.manager?.deleteTabs(message.tabIds);
           break;
         case "renameTab":
           void this.manager?.renameTab(message.tabId, message.title);

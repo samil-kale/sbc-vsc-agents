@@ -11,10 +11,22 @@ const ADD_ICON_SVG =
 
 export interface TabBarCallbacks {
   onSelect: (tabId: string) => void;
-  onClose: (tabId: string) => void;
+  /** Closes the given tabs as one batch - see the context menu's multi-tab entries. */
+  onClose: (tabIds: string[]) => void;
   onNew: () => void;
   onRename: (tabId: string, title: string) => void;
 }
+
+/** One entry of the tab context menu; a missing run renders the entry disabled. */
+interface ContextMenuAction {
+  label: string;
+  run?: () => void;
+}
+
+/** Divides the menu's action groups, like VS Code's own menu separators. */
+const SEPARATOR = "separator";
+
+type ContextMenuEntry = ContextMenuAction | typeof SEPARATOR;
 
 /**
  * DOM-only tab strip mimicking VS Code's editor tabs. Callbacks report user intent;
@@ -27,6 +39,8 @@ export class TabBar {
   /** At most one tab can be renamed at a time - a second dblclick while one is already
    * in progress is ignored rather than interrupting the first. */
   private editingTabId: string | undefined;
+  /** The open tab context menu, if any - at most one exists at a time. */
+  private contextMenu: HTMLElement | undefined;
 
   constructor(
     private readonly tabsElement: HTMLElement,
@@ -39,6 +53,8 @@ export class TabBar {
     this.tabsElement.addEventListener(
       "wheel",
       (event) => {
+        // Scrolling moves the tab the menu was opened on out from under it.
+        this.closeContextMenu();
         if (event.deltaY !== 0) {
           event.preventDefault();
           this.tabsElement.scrollLeft += event.deltaY;
@@ -169,6 +185,108 @@ export class TabBar {
     input.addEventListener("blur", onBlur);
   }
 
+  /** The context menu only carries the tab id, while beginRename needs the label element
+   * it swaps for the rename input - the same one the dblclick handler passes (see
+   * render()) - so look it back up here. */
+  private renameFromMenu(tabId: string): void {
+    const labelElement = this.tabsElement.querySelector<HTMLElement>(
+      `[data-tab-id="${CSS.escape(tabId)}"] .tab-label`
+    );
+    const tab = this.getTab(tabId);
+    if (labelElement && tab) {
+      this.beginRename(tabId, labelElement, tab.title);
+    }
+  }
+
+  private readonly onDocumentMouseDown = (event: MouseEvent) => {
+    if (!this.contextMenu?.contains(event.target as Node)) {
+      this.closeContextMenu();
+    }
+  };
+
+  private readonly onDocumentKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      // Listened for in the capture phase and swallowed here, so dismissing the menu
+      // can't double as an ESC keystroke for the (still focused) terminal's CLI.
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeContextMenu();
+    }
+  };
+
+  private readonly onWindowBlur = () => this.closeContextMenu();
+
+  /**
+   * VS Code's editor tab context menu, reduced to its close actions plus rename. For a
+   * close action the set of tabs it would close is what decides whether it's enabled, so
+   * "nothing to close" (a lone tab, or a right-click on the last tab) renders it disabled.
+   */
+  private openContextMenu(event: MouseEvent, tabId: string): void {
+    this.closeContextMenu();
+
+    const tabIds = this.tabs.map((tab) => tab.tabId);
+    const closeAction = (label: string, targets: string[]): ContextMenuAction => ({
+      label,
+      run: targets.length > 0 ? () => this.callbacks.onClose(targets) : undefined
+    });
+    const entries: ContextMenuEntry[] = [
+      closeAction("Close", [tabId]),
+      closeAction("Close Others", tabIds.filter((id) => id !== tabId)),
+      closeAction("Close to the Right", tabIds.slice(tabIds.indexOf(tabId) + 1)),
+      closeAction("Close All", tabIds),
+      SEPARATOR,
+      { label: "Rename", run: () => this.renameFromMenu(tabId) }
+    ];
+
+    const menu = document.createElement("div");
+    menu.className = "context-menu";
+    for (const entry of entries) {
+      const item = document.createElement("div");
+      if (entry === SEPARATOR) {
+        item.className = "context-menu-separator";
+        menu.appendChild(item);
+        continue;
+      }
+      item.className = "context-menu-item";
+      item.textContent = entry.label;
+      const run = entry.run;
+      if (run) {
+        item.addEventListener("click", () => {
+          this.closeContextMenu();
+          run();
+        });
+      } else {
+        item.classList.add("disabled");
+      }
+      menu.appendChild(item);
+    }
+    document.body.appendChild(menu);
+    this.contextMenu = menu;
+
+    // Anchored at the pointer like VS Code, then clamped - the sidebar is narrow enough
+    // that a menu opened near its right edge would otherwise hang outside the webview.
+    menu.style.left = `${event.clientX}px`;
+    menu.style.top = `${event.clientY}px`;
+    const { width, height } = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(0, Math.min(event.clientX, window.innerWidth - width))}px`;
+    menu.style.top = `${Math.max(0, Math.min(event.clientY, window.innerHeight - height))}px`;
+
+    document.addEventListener("mousedown", this.onDocumentMouseDown, true);
+    document.addEventListener("keydown", this.onDocumentKeyDown, true);
+    window.addEventListener("blur", this.onWindowBlur);
+  }
+
+  private closeContextMenu(): void {
+    if (!this.contextMenu) {
+      return;
+    }
+    this.contextMenu.remove();
+    this.contextMenu = undefined;
+    document.removeEventListener("mousedown", this.onDocumentMouseDown, true);
+    document.removeEventListener("keydown", this.onDocumentKeyDown, true);
+    window.removeEventListener("blur", this.onWindowBlur);
+  }
+
   private render(): void {
     if (this.editingTabId) {
       // replaceChildren() below detaches every existing node before reinserting the new
@@ -188,6 +306,22 @@ export class TabBar {
         const label = tab.title || "New session";
         element.title = tab.updatedAt ? `${label}\nLast activity: ${new Date(tab.updatedAt).toLocaleString()}` : label;
         element.addEventListener("click", () => this.callbacks.onSelect(tab.tabId));
+        // Keeps the terminal focused across the whole right-click interaction: without
+        // this, mousedown's default focus handling blurs xterm's textarea (the tab isn't
+        // focusable, so focus falls back to <body>), leaving the user unable to type
+        // after the menu closes until they click the terminal again.
+        element.addEventListener("mousedown", (event) => {
+          if (event.button === 2) {
+            event.preventDefault();
+          }
+        });
+        element.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          // main.ts handles contextmenu on the document to paste clipboard images into
+          // the terminal - a right-click on a tab must not reach it.
+          event.stopPropagation();
+          this.openContextMenu(event, tab.tabId);
+        });
 
         const labelElement = document.createElement("span");
         labelElement.className = "tab-label";
@@ -204,7 +338,7 @@ export class TabBar {
         closeElement.innerHTML = CLOSE_ICON_SVG;
         closeElement.addEventListener("click", (event) => {
           event.stopPropagation();
-          this.callbacks.onClose(tab.tabId);
+          this.callbacks.onClose([tab.tabId]);
         });
         element.appendChild(closeElement);
 
