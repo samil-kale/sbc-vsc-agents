@@ -43,6 +43,13 @@ export interface AgentSessionInfo {
   title: string;
   /** Last activity, ms since epoch (Claude: transcript mtime; opencode: `updated`). */
   updatedAt: number;
+  /**
+   * True while `title` is only standing in for a name the agent hasn't assigned yet
+   * (Claude: the first prompt, shown until an agent-name/ai-title lands). Those arrive
+   * from a background call that can finish after the CLI has gone quiet, so the manager
+   * keeps polling a while longer for sessions flagged here - see doReconcile.
+   */
+  provisionalTitle?: boolean;
 }
 
 /**

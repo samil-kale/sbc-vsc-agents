@@ -26,11 +26,10 @@ export const claudeSessionProvider: SessionProvider = {
       );
       stats.sort((a, b) => b.mtime - a.mtime);
       return await Promise.all(
-        stats.map(async ({ id, filePath, mtime }) => ({
-          id,
-          title: await extractTitle(filePath, id),
-          updatedAt: mtime
-        }))
+        stats.map(async ({ id, filePath, mtime }) => {
+          const { title, provisional } = await extractTitle(filePath, id);
+          return { id, title, updatedAt: mtime, provisionalTitle: provisional };
+        })
       );
     } catch (error) {
       console.error("[sbc] claude session listing failed:", error);
@@ -88,26 +87,36 @@ async function findProjectDir(cwd: string): Promise<string | undefined> {
 const TITLE_MAX_LENGTH = 60;
 const TITLE_SCAN_BYTE_LIMIT = 256 * 1024;
 
+interface ResolvedTitle {
+  title: string;
+  /** No name assigned by Claude yet - `title` is the first prompt standing in for one. */
+  provisional: boolean;
+}
+
 /**
- * Only ever shows a name Claude Code itself actually assigned - never a guess derived
- * from raw message content. A `custom-title` entry (Claude's own `/rename`) always
- * wins and is appended at the true end of the file, so it's found via a tail scan
- * rather than the head window below. Otherwise falls back to Claude's own
- * auto-generated "ai-title" (what `/resume` shows - re-checked on every occurrence
- * since a later one supersedes an earlier one), else a "summary" entry (only seen
- * after `/compact`). Falls back to "" - the UI shows a placeholder - if Claude hasn't
- * assigned any of these yet.
+ * Resolves a session's display name the same way Claude Code's own `/resume` list does
+ * (order verified against the CLI, including that a rename outranks an "agent-name"):
+ * a `custom-title` entry (Claude's own `/rename`, and what our rename writes) wins and
+ * is appended at the true end of the file, so it's found via a tail scan rather than the
+ * head window below. Otherwise "agent-name", else "ai-title" - both re-checked on every
+ * occurrence since a later one supersedes an earlier one - else a "summary" entry (only
+ * seen after `/compact`), else the first prompt the user typed: Claude assigns no title
+ * at all to short sessions, and `/resume` labels those by that prompt rather than
+ * leaving them blank. Falls back to "" - the UI shows a placeholder - for a transcript
+ * with none of these.
  */
-async function extractTitle(filePath: string, sessionId: string): Promise<string> {
+async function extractTitle(filePath: string, sessionId: string): Promise<ResolvedTitle> {
   const customTitle = await findLastCustomTitle(filePath, sessionId);
   if (customTitle) {
-    return truncateTitle(customTitle);
+    return { title: truncateTitle(customTitle), provisional: false };
   }
 
   const stream = fs.createReadStream(filePath, { encoding: "utf8", end: TITLE_SCAN_BYTE_LIMIT });
   const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  let agentName: string | undefined;
   let aiTitle: string | undefined;
   let summary: string | undefined;
+  let firstPrompt: string | undefined;
   try {
     for await (const line of lines) {
       let entry: Record<string, unknown>;
@@ -116,10 +125,14 @@ async function extractTitle(filePath: string, sessionId: string): Promise<string
       } catch {
         continue;
       }
-      if (entry.type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle.trim()) {
+      if (entry.type === "agent-name" && typeof entry.agentName === "string" && entry.agentName.trim()) {
+        agentName = entry.agentName;
+      } else if (entry.type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle.trim()) {
         aiTitle = entry.aiTitle;
       } else if (summary === undefined && entry.type === "summary" && typeof entry.summary === "string" && entry.summary.trim()) {
         summary = entry.summary;
+      } else if (firstPrompt === undefined && entry.type === "user") {
+        firstPrompt = typedPromptText(entry);
       }
     }
   } catch (error) {
@@ -128,8 +141,23 @@ async function extractTitle(filePath: string, sessionId: string): Promise<string
     lines.close();
     stream.destroy();
   }
-  const title = aiTitle ?? summary;
-  return title ? truncateTitle(title) : "";
+  const assigned = agentName ?? aiTitle ?? summary;
+  const title = assigned ?? firstPrompt;
+  return { title: title ? truncateTitle(title) : "", provisional: assigned === undefined };
+}
+
+/**
+ * Most `user` entries are tool results the CLI writes back into the transcript itself;
+ * only those tagged `origin.kind === "human"` are prompts the user actually typed.
+ * Their `content` is a plain string (no block/array form seen in any transcript here).
+ */
+function typedPromptText(entry: Record<string, unknown>): string | undefined {
+  const origin = entry.origin as { kind?: unknown } | undefined;
+  if (origin?.kind !== "human") {
+    return undefined;
+  }
+  const message = entry.message as { content?: unknown } | undefined;
+  return typeof message?.content === "string" && message.content.trim() ? message.content : undefined;
 }
 
 /** Reads just the transcript's tail (custom-title is appended at the end, potentially

@@ -235,7 +235,9 @@ export class TabBar {
       closeAction("Close to the Right", tabIds.slice(tabIds.indexOf(tabId) + 1)),
       closeAction("Close All", tabIds),
       SEPARATOR,
-      { label: "Rename", run: () => this.renameFromMenu(tabId) }
+      // A tab whose agent hasn't persisted a session yet has nothing to rename - the
+      // host would just revert the new label, so don't offer it in the first place.
+      { label: "Rename", run: this.getTab(tabId)?.hasSession ? () => this.renameFromMenu(tabId) : undefined }
     ];
 
     const menu = document.createElement("div");
@@ -328,6 +330,10 @@ export class TabBar {
         labelElement.textContent = label;
         labelElement.addEventListener("dblclick", (event) => {
           event.stopPropagation();
+          // Same reason the context menu's Rename entry is disabled - see openContextMenu.
+          if (!tab.hasSession) {
+            return;
+          }
           this.beginRename(tab.tabId, labelElement, tab.title);
         });
         element.appendChild(labelElement);

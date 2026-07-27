@@ -3,11 +3,15 @@ import type { AgentConfig } from "./agent";
 import { AgentSession, checkAgentInstalled } from "./session";
 import type { HostToWebviewMessage, TabDescriptor } from "./protocol";
 
-interface TabState extends TabDescriptor {
+/** The descriptor's `hasSession` is left out here: `sessionId` below is the source of
+ * truth for it, and it's derived from that whenever a tab is posted to the webview. */
+interface TabState extends Omit<TabDescriptor, "hasSession"> {
   /** Agent-native session id; undefined while a fresh tab's CLI hasn't persisted one yet. */
   sessionId?: string;
   /** When this tab's pty was spawned - used to claim newly persisted sessions. */
   spawnedAt?: number;
+  /** Mirrors AgentSessionInfo.provisionalTitle for this tab's session. */
+  provisionalTitle?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -31,6 +35,14 @@ const RECONCILE_MAX_RETRIES = 3;
 // the placeholder long after the CLI persisted its title. Cap how far output can push
 // the reconcile out while that's still the case.
 const RECONCILE_MAX_WAIT_MS = 10000;
+// The retries above are tied to output: they start when it stops and are exhausted ~20s
+// later. A session's real name doesn't follow that rhythm - Claude derives it in a
+// background call that can land once its CLI has long gone quiet, and a file write
+// produces no output to schedule another pass on. So while a tab still shows no title or
+// only a stand-in one, keep polling past the burst, slower (each pass may spawn the
+// agent's CLI) and bounded, instead of leaving it stale until the user types again.
+const RECONCILE_PENDING_TITLE_RETRY_MS = 15000;
+const RECONCILE_PENDING_TITLE_MAX_RETRIES = 8;
 
 export class AgentSessionManager {
   private tabs: TabState[] = [];
@@ -45,6 +57,8 @@ export class AgentSessionManager {
   private reconciling: Promise<void> | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileRetriesLeft = 0;
+  /** Budget for the slower follow-up polling while a tab's title is still unsettled. */
+  private pendingTitleRetriesLeft = 0;
   /** Latest point in time the debounced reconcile may be pushed to; unset once it fires. */
   private reconcileDeadline: number | undefined;
   /** Session ids whose removal is still in flight - reconcile must not re-claim them. */
@@ -89,6 +103,7 @@ export class AgentSessionManager {
         activeTab.sessionId = mostRecent.id;
         activeTab.title = mostRecent.title;
         activeTab.updatedAt = mostRecent.updatedAt;
+        activeTab.provisionalTitle = mostRecent.provisionalTitle;
       }
       this.tabs = [activeTab];
       this.activeTabId = activeTab.tabId;
@@ -99,6 +114,7 @@ export class AgentSessionManager {
         sessionId: info.id,
         title: info.title,
         updatedAt: info.updatedAt,
+        provisionalTitle: info.provisionalTitle,
         status: this.installed ? "ready" : "missing"
       }));
       this.tabs.push(...remainingTabs);
@@ -129,11 +145,12 @@ export class AgentSessionManager {
   }
 
   getTabsSnapshot(): TabDescriptor[] {
-    return this.tabs.map(({ tabId, title, updatedAt, status }) => ({
+    return this.tabs.map(({ tabId, title, updatedAt, status, sessionId }) => ({
       tabId,
       title,
       updatedAt,
-      status
+      status,
+      hasSession: sessionId !== undefined
     }));
   }
 
@@ -227,8 +244,12 @@ export class AgentSessionManager {
     const tab = this.createPendingTab();
     this.tabs.push(tab);
     this.activeTabId = tab.tabId;
-    const { tabId, title, updatedAt, status } = tab;
-    this.options.post({ type: "tabAdded", tab: { tabId, title, updatedAt, status }, activate: true });
+    const { tabId, title, updatedAt, status, sessionId } = tab;
+    this.options.post({
+      type: "tabAdded",
+      tab: { tabId, title, updatedAt, status, hasSession: sessionId !== undefined },
+      activate: true
+    });
   }
 
   private createPendingTab(): TabState {
@@ -342,6 +363,8 @@ export class AgentSessionManager {
     try {
       await agent.sessions.rename(agentPath, workspaceRoot, tab.sessionId, title);
       tab.title = title.trim();
+      // A name the user picked is final - nothing left for the polling above to wait for.
+      tab.provisionalTitle = false;
     } catch (error) {
       void vscode.window.showErrorMessage(`Could not rename ${agent.displayName} session: ${String(error)}`);
       tab.title = previousTitle;
@@ -350,12 +373,16 @@ export class AgentSessionManager {
   }
 
   private postTabUpdate(tab: TabState): void {
-    const { tabId, title, updatedAt, status } = tab;
-    this.options.post({ type: "tabUpdated", tab: { tabId, title, updatedAt, status } });
+    const { tabId, title, updatedAt, status, sessionId } = tab;
+    this.options.post({
+      type: "tabUpdated",
+      tab: { tabId, title, updatedAt, status, hasSession: sessionId !== undefined }
+    });
   }
 
   private scheduleReconcile(): void {
     this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
+    this.pendingTitleRetriesLeft = RECONCILE_PENDING_TITLE_MAX_RETRIES;
     // Only tabs still missing a session id or title need the mid-output reconcile; for
     // everything else the debounce alone keeps the extra session listings out of a turn.
     if (this.reconcileDeadline === undefined && this.tabs.some((tab) => !tab.sessionId || !tab.title)) {
@@ -376,6 +403,11 @@ export class AgentSessionManager {
         if (this.reconcileRetriesLeft > 0) {
           this.reconcileRetriesLeft -= 1;
           this.armReconcileTimer(RECONCILE_RETRY_MS);
+          return;
+        }
+        if (this.pendingTitleRetriesLeft > 0 && this.tabs.some((tab) => tab.provisionalTitle || !tab.title)) {
+          this.pendingTitleRetriesLeft -= 1;
+          this.armReconcileTimer(RECONCILE_PENDING_TITLE_RETRY_MS);
         }
       });
     }, cappedDelay);
@@ -394,7 +426,7 @@ export class AgentSessionManager {
   }
 
   private async doReconcile(): Promise<void> {
-    const { agent, agentPath, workspaceRoot, post } = this.options;
+    const { agent, agentPath, workspaceRoot } = this.options;
     if (!agent.sessions) {
       return;
     }
@@ -417,10 +449,10 @@ export class AgentSessionManager {
       tab.sessionId = match.id;
       tab.title = match.title;
       tab.updatedAt = match.updatedAt;
+      tab.provisionalTitle = match.provisionalTitle;
       // Detached tabs are gone from the UI - claiming their id is all that's needed.
       if (this.tabs.includes(tab)) {
-        const { tabId, title, updatedAt, status } = tab;
-        post({ type: "tabUpdated", tab: { tabId, title, updatedAt, status } });
+        this.postTabUpdate(tab);
       }
     }
 
@@ -429,11 +461,16 @@ export class AgentSessionManager {
         continue;
       }
       const info = infos.find((i) => i.id === tab.sessionId);
-      if (info && (info.title !== tab.title || info.updatedAt !== tab.updatedAt)) {
+      if (!info) {
+        continue;
+      }
+      // Tracked even when the label itself is unchanged: an assigned name can read the
+      // same as the stand-in it replaces, and that still ends the polling below.
+      tab.provisionalTitle = info.provisionalTitle;
+      if (info.title !== tab.title || info.updatedAt !== tab.updatedAt) {
         tab.title = info.title;
         tab.updatedAt = info.updatedAt;
-        const { tabId, title, updatedAt, status } = tab;
-        post({ type: "tabUpdated", tab: { tabId, title, updatedAt, status } });
+        this.postTabUpdate(tab);
       }
     }
   }

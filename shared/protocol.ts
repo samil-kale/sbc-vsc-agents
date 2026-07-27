@@ -8,6 +8,9 @@ export interface TabDescriptor {
   /** Last activity, ms since epoch; absent for pending "New session" tabs. */
   updatedAt?: number;
   status: SessionStatus;
+  /** Whether the agent has persisted a session for this tab yet. False means there is
+   * nothing to rename (see AgentSessionManager.renameTab), so the UI offers no rename. */
+  hasSession: boolean;
 }
 
 export type HostToWebviewMessage =
