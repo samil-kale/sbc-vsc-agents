@@ -26,6 +26,11 @@ const RECONCILE_DEBOUNCE_MS = 5000;
 // keep retrying a few times at the same interval before giving up.
 const RECONCILE_RETRY_MS = 5000;
 const RECONCILE_MAX_RETRIES = 3;
+// A busy CLI redraws its TUI continuously, so the debounce above would be pushed out
+// for the whole turn and a tab whose session/title isn't known yet would keep showing
+// the placeholder long after the CLI persisted its title. Cap how far output can push
+// the reconcile out while that's still the case.
+const RECONCILE_MAX_WAIT_MS = 10000;
 
 export class AgentSessionManager {
   private tabs: TabState[] = [];
@@ -40,6 +45,8 @@ export class AgentSessionManager {
   private reconciling: Promise<void> | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileRetriesLeft = 0;
+  /** Latest point in time the debounced reconcile may be pushed to; unset once it fires. */
+  private reconcileDeadline: number | undefined;
   /** Session ids whose removal is still in flight - reconcile must not re-claim them. */
   private readonly deletingSessionIds = new Set<string>();
   /** Tabs already removed from the UI that still need their persisted session claimed for deletion. */
@@ -325,19 +332,29 @@ export class AgentSessionManager {
 
   private scheduleReconcile(): void {
     this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
+    // Only tabs still missing a session id or title need the mid-output reconcile; for
+    // everything else the debounce alone keeps the extra session listings out of a turn.
+    if (this.reconcileDeadline === undefined && this.tabs.some((tab) => !tab.sessionId || !tab.title)) {
+      this.reconcileDeadline = Date.now() + RECONCILE_MAX_WAIT_MS;
+    }
     this.armReconcileTimer(RECONCILE_DEBOUNCE_MS);
   }
 
   private armReconcileTimer(delayMs: number): void {
     clearTimeout(this.reconcileTimer);
+    const cappedDelay =
+      this.reconcileDeadline === undefined
+        ? delayMs
+        : Math.min(delayMs, Math.max(0, this.reconcileDeadline - Date.now()));
     this.reconcileTimer = setTimeout(() => {
+      this.reconcileDeadline = undefined;
       void this.reconcile().then(() => {
         if (this.reconcileRetriesLeft > 0) {
           this.reconcileRetriesLeft -= 1;
           this.armReconcileTimer(RECONCILE_RETRY_MS);
         }
       });
-    }, delayMs);
+    }, cappedDelay);
   }
 
   /**
