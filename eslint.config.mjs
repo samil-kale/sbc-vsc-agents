@@ -16,7 +16,7 @@ export default tseslint.config(
     }
   },
   {
-    files: ["**/esbuild.js"],
+    files: ["**/esbuild.js", "scripts/**/*.js"],
     languageOptions: {
       sourceType: "commonjs",
       globals: {
