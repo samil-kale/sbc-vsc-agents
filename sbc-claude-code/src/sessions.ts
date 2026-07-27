@@ -98,9 +98,12 @@ interface ResolvedTitle {
  * (order verified against the CLI, including that a rename outranks an "agent-name"):
  * a `custom-title` entry (Claude's own `/rename`, and what our rename writes) wins and
  * is appended at the true end of the file, so it's found via a tail scan rather than the
- * head window below. Otherwise "agent-name", else "ai-title" - both re-checked on every
- * occurrence since a later one supersedes an earlier one - else a "summary" entry (only
- * seen after `/compact`), else the first prompt the user typed: Claude assigns no title
+ * head window below. Otherwise "agent-name", else "ai-title" - for both, the last
+ * occurrence *within that window* wins, since a later one supersedes an earlier one. A
+ * title Claude only changed past the window would be missed; it re-emits the same one
+ * every turn instead (54 identical entries across a 2MB transcript here), so that stays
+ * theoretical. Else a "summary" entry (only seen after `/compact`), else the first
+ * prompt the user typed: Claude assigns no title
  * at all to short sessions, and `/resume` labels those by that prompt rather than
  * leaving them blank. Falls back to "" - the UI shows a placeholder - for a transcript
  * with none of these.
@@ -125,12 +128,15 @@ async function extractTitle(filePath: string, sessionId: string): Promise<Resolv
       } catch {
         continue;
       }
-      if (entry.type === "agent-name" && typeof entry.agentName === "string" && entry.agentName.trim()) {
-        agentName = entry.agentName;
-      } else if (entry.type === "ai-title" && typeof entry.aiTitle === "string" && entry.aiTitle.trim()) {
-        aiTitle = entry.aiTitle;
-      } else if (summary === undefined && entry.type === "summary" && typeof entry.summary === "string" && entry.summary.trim()) {
-        summary = entry.summary;
+      // agent-name/ai-title keep the last occurrence (a later one supersedes an earlier
+      // one), summary and the first prompt the first - an empty value never displaces
+      // what's already there either way.
+      if (entry.type === "agent-name") {
+        agentName = nonEmptyString(entry.agentName) ?? agentName;
+      } else if (entry.type === "ai-title") {
+        aiTitle = nonEmptyString(entry.aiTitle) ?? aiTitle;
+      } else if (entry.type === "summary") {
+        summary ??= nonEmptyString(entry.summary);
       } else if (firstPrompt === undefined && entry.type === "user") {
         firstPrompt = typedPromptText(entry);
       }
@@ -157,7 +163,12 @@ function typedPromptText(entry: Record<string, unknown>): string | undefined {
     return undefined;
   }
   const message = entry.message as { content?: unknown } | undefined;
-  return typeof message?.content === "string" && message.content.trim() ? message.content : undefined;
+  return nonEmptyString(message?.content);
+}
+
+/** Transcript fields are untrusted JSON - a title only counts if it's a non-blank string. */
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 /** Reads just the transcript's tail (custom-title is appended at the end, potentially
@@ -179,13 +190,11 @@ async function findLastCustomTitle(filePath: string, sessionId: string): Promise
       } catch {
         continue;
       }
-      if (
-        entry.type === "custom-title" &&
-        entry.sessionId === sessionId &&
-        typeof entry.customTitle === "string" &&
-        entry.customTitle.trim()
-      ) {
-        return entry.customTitle;
+      if (entry.type === "custom-title" && entry.sessionId === sessionId) {
+        const customTitle = nonEmptyString(entry.customTitle);
+        if (customTitle) {
+          return customTitle;
+        }
       }
     }
   } catch (error) {

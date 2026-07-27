@@ -38,11 +38,33 @@ const RECONCILE_MAX_WAIT_MS = 10000;
 // The retries above are tied to output: they start when it stops and are exhausted ~20s
 // later. A session's real name doesn't follow that rhythm - Claude derives it in a
 // background call that can land once its CLI has long gone quiet, and a file write
-// produces no output to schedule another pass on. So while a tab still shows no title or
-// only a stand-in one, keep polling past the burst, slower (each pass may spawn the
-// agent's CLI) and bounded, instead of leaving it stale until the user types again.
+// produces no output to schedule another pass on. So keep polling past the burst for
+// those, slower and bounded: a pass costs an agent CLI spawn (~1.2s for opencode), which
+// is worth spending on a session whose name is still coming, but not on a tab that has
+// no session to be named yet - see awaitsTitle.
 const RECONCILE_PENDING_TITLE_RETRY_MS = 15000;
 const RECONCILE_PENDING_TITLE_MAX_RETRIES = 8;
+
+/** Nothing about this tab's label is settled yet: no session claimed, no title, or only
+ * a stand-in the agent may still replace with a name of its own. */
+function titleUnsettled(tab: TabState): boolean {
+  return !tab.sessionId || !tab.title || tab.provisionalTitle === true;
+}
+
+/**
+ * Whether the tab's label can still change on its own, which is what the slow polling
+ * waits for. Same notion as above, minus tabs without a session: nothing names an unused
+ * tab, so one would otherwise keep that polling alive for as long as it sits there.
+ */
+function awaitsTitle(tab: TabState): boolean {
+  return tab.sessionId !== undefined && titleUnsettled(tab);
+}
+
+/** The webview's view of a tab - everything the host tracks beyond this stays internal. */
+function toDescriptor(tab: TabState): TabDescriptor {
+  const { tabId, title, updatedAt, status, sessionId } = tab;
+  return { tabId, title, updatedAt, status, hasSession: sessionId !== undefined };
+}
 
 export class AgentSessionManager {
   private tabs: TabState[] = [];
@@ -145,13 +167,7 @@ export class AgentSessionManager {
   }
 
   getTabsSnapshot(): TabDescriptor[] {
-    return this.tabs.map(({ tabId, title, updatedAt, status, sessionId }) => ({
-      tabId,
-      title,
-      updatedAt,
-      status,
-      hasSession: sessionId !== undefined
-    }));
+    return this.tabs.map(toDescriptor);
   }
 
   handleResize(tabId: string, cols: number, rows: number): void {
@@ -244,12 +260,7 @@ export class AgentSessionManager {
     const tab = this.createPendingTab();
     this.tabs.push(tab);
     this.activeTabId = tab.tabId;
-    const { tabId, title, updatedAt, status, sessionId } = tab;
-    this.options.post({
-      type: "tabAdded",
-      tab: { tabId, title, updatedAt, status, hasSession: sessionId !== undefined },
-      activate: true
-    });
+    this.options.post({ type: "tabAdded", tab: toDescriptor(tab), activate: true });
   }
 
   private createPendingTab(): TabState {
@@ -373,19 +384,17 @@ export class AgentSessionManager {
   }
 
   private postTabUpdate(tab: TabState): void {
-    const { tabId, title, updatedAt, status, sessionId } = tab;
-    this.options.post({
-      type: "tabUpdated",
-      tab: { tabId, title, updatedAt, status, hasSession: sessionId !== undefined }
-    });
+    this.options.post({ type: "tabUpdated", tab: toDescriptor(tab) });
   }
 
   private scheduleReconcile(): void {
     this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
     this.pendingTitleRetriesLeft = RECONCILE_PENDING_TITLE_MAX_RETRIES;
-    // Only tabs still missing a session id or title need the mid-output reconcile; for
-    // everything else the debounce alone keeps the extra session listings out of a turn.
-    if (this.reconcileDeadline === undefined && this.tabs.some((tab) => !tab.sessionId || !tab.title)) {
+    // Only tabs whose label isn't settled need the mid-output reconcile; for everything
+    // else the debounce alone keeps the extra session listings out of a turn. A stand-in
+    // title counts as unsettled - it's non-empty, but the agent can still replace it
+    // mid-turn, and waiting for output to stop would show the old label for that long.
+    if (this.reconcileDeadline === undefined && this.tabs.some(titleUnsettled)) {
       this.reconcileDeadline = Date.now() + RECONCILE_MAX_WAIT_MS;
     }
     this.armReconcileTimer(RECONCILE_DEBOUNCE_MS);
@@ -405,7 +414,7 @@ export class AgentSessionManager {
           this.armReconcileTimer(RECONCILE_RETRY_MS);
           return;
         }
-        if (this.pendingTitleRetriesLeft > 0 && this.tabs.some((tab) => tab.provisionalTitle || !tab.title)) {
+        if (this.pendingTitleRetriesLeft > 0 && this.tabs.some(awaitsTitle)) {
           this.pendingTitleRetriesLeft -= 1;
           this.armReconcileTimer(RECONCILE_PENDING_TITLE_RETRY_MS);
         }
