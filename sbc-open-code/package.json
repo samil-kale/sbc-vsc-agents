@@ -2,7 +2,7 @@
   "name": "sbc-opencode",
   "displayName": "SBC Open Code",
   "description": "Sidebar terminal for running OpenCode inside VS Code.",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "publisher": "samil-kale",
   "private": true,
   "license": "MIT",
