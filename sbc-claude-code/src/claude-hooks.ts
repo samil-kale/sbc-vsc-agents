@@ -7,7 +7,8 @@ import {
   buildReadContextCommand,
   debugLogFilePath,
   IdeContextTracker,
-  terminalLogFilePath
+  terminalLogFilePath,
+  unsavedBuffersFilePath
 } from "@shared/ide-context";
 import { createByteThresholdCheck } from "@shared/session-ready";
 
@@ -32,6 +33,7 @@ export function setupClaudeHooks(
   const contextFile = path.join(storageDir, "ide-context.md");
   const debugLogFile = debugLogFilePath(storageDir);
   const terminalLogFile = terminalLogFilePath(storageDir);
+  const unsavedBuffersFile = unsavedBuffersFilePath(storageDir);
   const readContextCommand = buildReadContextCommand(storageDir, contextFile);
 
   const hooks: Record<string, unknown> = {
@@ -96,18 +98,25 @@ export function setupClaudeHooks(
     ];
   }
 
-  // The context block points the agent at these logs, which live in the storage dir -
-  // outside the workspace, where reads are denied unless granted. Scoped to the two
-  // files rather than the whole dir, which also holds the notify scripts and this
+  // The context block points the agent at these files, which live in the storage dir -
+  // outside the workspace, where reads are denied unless granted. Scoped to the three
+  // of them rather than the whole dir, which also holds the notify scripts and this
   // settings file.
-  const permissions = { allow: [`Read(${debugLogFile})`, `Read(${terminalLogFile})`] };
+  const permissions = {
+    allow: [`Read(${debugLogFile})`, `Read(${terminalLogFile})`, `Read(${unsavedBuffersFile})`]
+  };
 
   const settingsFile = path.join(storageDir, "sbc-hooks-settings.json");
   fs.writeFileSync(settingsFile, JSON.stringify({ hooks, permissions }, null, 2));
 
   return {
     args: ["--settings", settingsFile],
-    disposable: new IdeContextTracker({ contextFile, debugLogFile, terminalLogFile }),
+    disposable: new IdeContextTracker({
+      contextFile,
+      debugLogFile,
+      terminalLogFile,
+      unsavedBuffersFile
+    }),
     // Tuned empirically: unlike opencode, Claude Code doesn't seem to draw an early
     // splash/connecting frame before its real UI, so no grace period is needed - 500
     // sits comfortably above its small startup handshake (well under 150 bytes) and

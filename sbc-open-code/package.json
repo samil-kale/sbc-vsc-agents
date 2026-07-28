@@ -15,8 +15,22 @@
   "engines": {
     "vscode": "^1.93.0"
   },
-  "categories": ["AI"],
-  "keywords": ["opencode", "ai", "agent", "terminal", "console", "sidebar", "chat", "cli", "assistant", "coding agent", "llm"],
+  "categories": [
+    "AI"
+  ],
+  "keywords": [
+    "opencode",
+    "ai",
+    "agent",
+    "terminal",
+    "console",
+    "sidebar",
+    "chat",
+    "cli",
+    "assistant",
+    "coding agent",
+    "llm"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {

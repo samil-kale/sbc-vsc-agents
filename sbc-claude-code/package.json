@@ -14,8 +14,25 @@
   "engines": {
     "vscode": "^1.93.0"
   },
-  "categories": ["AI"],
-  "keywords": ["claude", "claude code", "ai", "agent", "terminal", "console", "sidebar", "chat", "cli", "assistant", "coding agent", "anthropic", "sonnet", "opus"],
+  "categories": [
+    "AI"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "ai",
+    "agent",
+    "terminal",
+    "console",
+    "sidebar",
+    "chat",
+    "cli",
+    "assistant",
+    "coding agent",
+    "anthropic",
+    "sonnet",
+    "opus"
+  ],
   "main": "./dist/extension.js",
   "activationEvents": [],
   "contributes": {

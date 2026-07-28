@@ -5,7 +5,12 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
 import { buildNotifyCommand } from "@shared/os-notify";
-import { debugLogFilePath, IdeContextTracker, terminalLogFilePath } from "@shared/ide-context";
+import {
+  debugLogFilePath,
+  IdeContextTracker,
+  terminalLogFilePath,
+  unsavedBuffersFilePath
+} from "@shared/ide-context";
 import { createByteThresholdCheck } from "@shared/session-ready";
 
 /**
@@ -171,7 +176,8 @@ export const SbcContextPlugin = async () => {
     disposable: new IdeContextTracker({
       contextFile,
       debugLogFile: debugLogFilePath(storageDir),
-      terminalLogFile: terminalLogFilePath(storageDir)
+      terminalLogFile: terminalLogFilePath(storageDir),
+      unsavedBuffersFile: unsavedBuffersFilePath(storageDir)
     }),
     // No grace period, unlike the standalone TUI this used to spawn: that one drew a
     // multi-KB splash about a second in, indistinguishable from the real UI by size

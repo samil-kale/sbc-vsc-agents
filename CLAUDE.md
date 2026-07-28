@@ -1,12 +1,5 @@
 # CLAUDE.md
 
-## Project
-
-sbc — VS Code extensions (`sbc-claude`, `sbc-opencode`) with a sidebar xterm.js
-terminal connected via node-pty to the respective CLI agent (`claude` / `opencode`).
-Logic lives in `shared/`; `sbc-claude-code/` and `sbc-open-code/` are thin entry
-points plus packaging config.
-
 ## Agent-specific vs. shared code
 
 `shared/` ships in every extension's bundle, so agent-only code (Claude Code's
@@ -59,7 +52,6 @@ equivalent for the others:
 
 ## Commands
 
-- `npm run compile` / `typecheck` / `lint`
 - `npm run install-extensions` — package both as .vsix, install via `code` CLI (must be on PATH)
 
 ## Manual testing
