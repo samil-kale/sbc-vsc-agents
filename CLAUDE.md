@@ -15,12 +15,33 @@ own package (`sbc-claude-code/src/`, `sbc-open-code/src/`), not `shared/`.
 
 For `shared/extension.ts` to invoke agent-specific setup without importing it,
 `AgentConfig` (`shared/agent.ts`) takes optional callbacks the extension supplies —
-see `setupHooks` (`sbc-claude-code/src/claude-hooks.ts`) and `resumeArgs` (each
-package's `src/resume.ts`). Follow this pattern for new agent-specific features.
+see `setupHooks` (`sbc-claude-code/src/claude-hooks.ts`), `resumeArgs` (each
+package's session provider) and `prepareSpawn` (async setup that must finish before
+any terminal starts; opencode uses it for its server). Follow this pattern for new
+agent-specific features.
 
 `shared/` is for agent-agnostic building blocks (session, webview, terminal
 spawning) and generic pieces another agent could reuse (`os-notify.ts`,
 `ide-context.ts`).
+
+## How each agent is driven
+
+Claude Code is a plain CLI: sessions are `<uuid>.jsonl` transcripts on disk, read
+directly, and `watch` is an `fs.watch` on the project directory.
+
+opencode is client/server. `sbc-open-code/src/server.ts` runs one `opencode serve`
+per workspace (random `OPENCODE_SERVER_PASSWORD`, HTTP Basic) and **everything** goes
+through it: the session listing, rename/delete, the `/event` stream, and the terminal
+itself, which runs as `opencode attach <url>`. Do not reach for the `opencode` CLI or
+its SQLite database instead — that starts a second, unrelated instance that merely
+shares the database file. Measured consequences of doing so: `session list` boots an
+instance (~1.2 s versus ~12 ms over HTTP), a read writes to the database, events never
+cross the process boundary, and a rename is invisible to the running TUI.
+
+The generated plugin (`opencode-hooks.ts`) is loaded by that server, not the TUI, and
+is down to one job: appending the IDE context in `chat.message`. There is no HTTP
+equivalent for that hook — everything else it used to do (OS notifications) now comes
+from the event stream in the extension host.
 
 ## Cross-platform requirement
 

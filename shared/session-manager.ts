@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { AgentConfig } from "./agent";
+import type { AgentConfig, SpawnPreparation } from "./agent";
 import { AgentSession, checkAgentInstalled } from "./session";
 import type { HostToWebviewMessage, TabDescriptor } from "./protocol";
 
@@ -35,29 +35,19 @@ const RECONCILE_MAX_RETRIES = 3;
 // the placeholder long after the CLI persisted its title. Cap how far output can push
 // the reconcile out while that's still the case.
 const RECONCILE_MAX_WAIT_MS = 10000;
-// The retries above are tied to output: they start when it stops and are exhausted ~20s
-// later. A session's real name doesn't follow that rhythm - Claude derives it in a
-// background call that can land once its CLI has long gone quiet, and a file write
-// produces no output to schedule another pass on. So keep polling past the burst for
-// those, slower and bounded: a pass costs an agent CLI spawn (~1.2s for opencode), which
-// is worth spending on a session whose name is still coming, but not on a tab that has
-// no session to be named yet - see awaitsTitle.
-const RECONCILE_PENDING_TITLE_RETRY_MS = 15000;
-const RECONCILE_PENDING_TITLE_MAX_RETRIES = 8;
+// A watcher event is the change itself, not a guess that one may have happened, so it
+// only needs enough of a debounce to collapse the handful of events a single write
+// produces. Both agents report changes that way; a name assigned after their output has
+// gone quiet arrives through `watch`, not through the retries above.
+const WATCH_DEBOUNCE_MS = 300;
+// Readiness fires on the CLI's first full frame, which is a moment before the terminal
+// actually looks settled - hiding the indicator right then reads as a flicker.
+const INDICATOR_LINGER_MS = 700;
 
 /** Nothing about this tab's label is settled yet: no session claimed, no title, or only
  * a stand-in the agent may still replace with a name of its own. */
 function titleUnsettled(tab: TabState): boolean {
   return !tab.sessionId || !tab.title || tab.provisionalTitle === true;
-}
-
-/**
- * Whether the tab's label can still change on its own, which is what the slow polling
- * waits for. Same notion as above, minus tabs without a session: nothing names an unused
- * tab, so one would otherwise keep that polling alive for as long as it sits there.
- */
-function awaitsTitle(tab: TabState): boolean {
-  return tab.sessionId !== undefined && titleUnsettled(tab);
 }
 
 /** The webview's view of a tab - everything the host tracks beyond this stays internal. */
@@ -79,14 +69,23 @@ export class AgentSessionManager {
   private reconciling: Promise<void> | undefined;
   private reconcileTimer: ReturnType<typeof setTimeout> | undefined;
   private reconcileRetriesLeft = 0;
-  /** Budget for the slower follow-up polling while a tab's title is still unsettled. */
-  private pendingTitleRetriesLeft = 0;
   /** Latest point in time the debounced reconcile may be pushed to; unset once it fires. */
   private reconcileDeadline: number | undefined;
   /** Session ids whose removal is still in flight - reconcile must not re-claim them. */
   private readonly deletingSessionIds = new Set<string>();
   /** Tabs already removed from the UI that still need their persisted session claimed for deletion. */
   private readonly detachedTabs: TabState[] = [];
+  /** Stops the agent's session watcher, if it supplied one. */
+  private stopWatching: (() => void) | undefined;
+  /** What agent.prepareSpawn set up, if anything - its args and env join every session's. */
+  private spawnPreparation: SpawnPreparation | undefined;
+  /** Set when that preparation failed; no session is started at all in that case. */
+  private prepareSpawnFailed = false;
+
+  /** Both conditions for running the agent at all: it exists, and its setup succeeded. */
+  private get canStartSessions(): boolean {
+    return this.installed && !this.prepareSpawnFailed;
+  }
 
   constructor(private readonly options: SessionManagerOptions) {}
 
@@ -103,6 +102,24 @@ export class AgentSessionManager {
       this.acquireIndicator();
     }
     try {
+      // Before anything that could lead to a spawn: opencode's listing already needs the
+      // server this brings up, and the terminal's own arguments come out of it too.
+      if (agent.prepareSpawn) {
+        try {
+          this.spawnPreparation = await agent.prepareSpawn(agentPath, workspaceRoot);
+        } catch (error) {
+          // No silent fallback: an agent that asks for preparation can't be run without
+          // it in any meaningful way (opencode would start a second instance that shares
+          // only the database - no events, renames invisible to it). Better to say so and
+          // start nothing than to hand over a terminal that quietly misbehaves.
+          console.error("[sbc] spawn preparation failed:", error);
+          void vscode.window.showErrorMessage(
+            `${agent.displayName} could not be started: ${String(error)}. Reload the window to retry.`
+          );
+          this.prepareSpawnFailed = true;
+        }
+      }
+
       // Awaited before the first tab is created (rather than raced with it) so the CLI
       // is only ever resumed by an explicit session id, never with a blind `--continue`
       // - some agent CLIs mishandle "continue" when there's no session yet.
@@ -137,10 +154,14 @@ export class AgentSessionManager {
         title: info.title,
         updatedAt: info.updatedAt,
         provisionalTitle: info.provisionalTitle,
-        status: this.installed ? "ready" : "missing"
+        status: this.canStartSessions ? "ready" : "missing"
       }));
       this.tabs.push(...remainingTabs);
       this.postTabsSnapshot();
+      // Started after the initial listing so its first event can't race the bootstrap.
+      this.stopWatching = agent.sessions?.watch?.(agentPath, workspaceRoot, () =>
+        this.scheduleReconcile(WATCH_DEBOUNCE_MS)
+      );
     } finally {
       if (reserveIndicator) {
         this.releaseIndicator();
@@ -177,7 +198,7 @@ export class AgentSessionManager {
       return;
     }
     const tab = this.tabs.find((t) => t.tabId === tabId);
-    if (!tab || !this.installed) {
+    if (!tab || !this.canStartSessions) {
       return;
     }
     this.startSession(tab).ensureStarted(cols, rows);
@@ -203,13 +224,15 @@ export class AgentSessionManager {
       if (!isSessionReady) {
         return;
       }
+      // Cleared before the delay, so a second call (e.g. the session stopping right
+      // after) can't queue a second release.
       isSessionReady = undefined;
-      this.releaseIndicator();
+      setTimeout(() => this.releaseIndicator(), INDICATOR_LINGER_MS);
     };
     const session = new AgentSession(
       agentPath,
       workspaceRoot,
-      env,
+      { ...env, ...this.spawnPreparation?.env },
       {
         onOutput: (data) => {
           post({ type: "output", tabId, data });
@@ -236,7 +259,7 @@ export class AgentSessionManager {
           }
         }
       },
-      [...baseArgs, ...resumeArgs]
+      [...baseArgs, ...(this.spawnPreparation?.args ?? []), ...resumeArgs]
     );
     if (!tab.sessionId) {
       tab.spawnedAt = Date.now();
@@ -265,7 +288,7 @@ export class AgentSessionManager {
 
   private createPendingTab(): TabState {
     this.newTabCounter += 1;
-    return { tabId: `new-${this.newTabCounter}`, title: "", status: this.installed ? "ready" : "missing" };
+    return { tabId: `new-${this.newTabCounter}`, title: "", status: this.canStartSessions ? "ready" : "missing" };
   }
 
   /**
@@ -387,9 +410,8 @@ export class AgentSessionManager {
     this.options.post({ type: "tabUpdated", tab: toDescriptor(tab) });
   }
 
-  private scheduleReconcile(): void {
+  private scheduleReconcile(delayMs = RECONCILE_DEBOUNCE_MS): void {
     this.reconcileRetriesLeft = RECONCILE_MAX_RETRIES;
-    this.pendingTitleRetriesLeft = RECONCILE_PENDING_TITLE_MAX_RETRIES;
     // Only tabs whose label isn't settled need the mid-output reconcile; for everything
     // else the debounce alone keeps the extra session listings out of a turn. A stand-in
     // title counts as unsettled - it's non-empty, but the agent can still replace it
@@ -397,7 +419,7 @@ export class AgentSessionManager {
     if (this.reconcileDeadline === undefined && this.tabs.some(titleUnsettled)) {
       this.reconcileDeadline = Date.now() + RECONCILE_MAX_WAIT_MS;
     }
-    this.armReconcileTimer(RECONCILE_DEBOUNCE_MS);
+    this.armReconcileTimer(delayMs);
   }
 
   private armReconcileTimer(delayMs: number): void {
@@ -412,11 +434,6 @@ export class AgentSessionManager {
         if (this.reconcileRetriesLeft > 0) {
           this.reconcileRetriesLeft -= 1;
           this.armReconcileTimer(RECONCILE_RETRY_MS);
-          return;
-        }
-        if (this.pendingTitleRetriesLeft > 0 && this.tabs.some(awaitsTitle)) {
-          this.pendingTitleRetriesLeft -= 1;
-          this.armReconcileTimer(RECONCILE_PENDING_TITLE_RETRY_MS);
         }
       });
     }, cappedDelay);
@@ -486,8 +503,13 @@ export class AgentSessionManager {
 
   stopAll(): void {
     clearTimeout(this.reconcileTimer);
+    this.stopWatching?.();
+    this.stopWatching = undefined;
     for (const session of this.sessions.values()) {
       session.stop();
     }
+    // Last: the sessions above may still be talking to whatever it set up.
+    this.spawnPreparation?.dispose();
+    this.spawnPreparation = undefined;
   }
 }

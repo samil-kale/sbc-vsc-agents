@@ -11,6 +11,100 @@ const MAX_DIAGNOSTICS = 20;
 const MAX_OTHER_DIAGNOSTICS = 10;
 const MAX_TABS = 15;
 const MAX_DEBUG_ERROR_CHARS = 4000;
+// The on-demand logs live in their own files, so they can hold far more than an inline
+// excerpt. A verbose producer still fills them without bound, so keep the most recent
+// slice rather than an ever-growing file.
+const MAX_LOG_CHARS = 500_000;
+const LOG_TRUNCATION_NOTE = "... [earlier output dropped, showing most recent]\n";
+
+/**
+ * The files the agent reads on demand, rather than getting them in every prompt. Both
+ * are also needed by Claude Code's generated settings, which has to grant read access
+ * to these exact paths - they sit in the extension's storage dir, outside the
+ * workspace, and reads there are denied by default (verified empirically; opencode has
+ * no such gate).
+ */
+export function debugLogFilePath(storageDir: string): string {
+  return path.join(storageDir, "debug-output.log");
+}
+
+export function terminalLogFilePath(storageDir: string): string {
+  return path.join(storageDir, "terminal-output.log");
+}
+
+/**
+ * A bounded log file, written only when its contents actually changed.
+ */
+class CappedLogFile {
+  private content = "";
+  private truncated = false;
+  private dirty = false;
+
+  constructor(private readonly file: string) {}
+
+  get chars(): number {
+    return this.content.length;
+  }
+
+  append(text: string): void {
+    this.content += text;
+    if (this.content.length > MAX_LOG_CHARS) {
+      this.content = this.content.slice(-MAX_LOG_CHARS);
+      this.truncated = true;
+    }
+    this.dirty = true;
+  }
+
+  reset(): void {
+    this.content = "";
+    this.truncated = false;
+    this.dirty = true;
+  }
+
+  flush(): void {
+    if (!this.dirty) {
+      return;
+    }
+    this.dirty = false;
+    fs.promises
+      .writeFile(this.file, this.truncated ? LOG_TRUNCATION_NOTE + this.content : this.content)
+      .catch((error) => console.error(`[sbc] failed to write ${path.basename(this.file)}:`, error));
+  }
+}
+
+// eslint-disable-next-line no-control-regex
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+
+/**
+ * Terminal data arrives raw. Escape sequences mean nothing in a log file, and a
+ * progress bar redraws its line with a bare carriage return - keeping only what
+ * follows the last one leaves each line as the terminal finally showed it, instead of
+ * one line per redraw.
+ */
+function cleanTerminalOutput(data: string): string {
+  return data
+    .replace(ANSI_PATTERN, "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.slice(line.lastIndexOf("\r") + 1))
+    .join("\n");
+}
+
+/** One shell command, assembled while it runs and appended to the log when it ends. */
+type RunningExecution = {
+  commandLine: string;
+  terminalName: string;
+  output: string;
+  drained: boolean;
+  ended: boolean;
+  exitCode: number | undefined;
+};
+
+export type IdeContextFiles = {
+  contextFile: string;
+  debugLogFile: string;
+  terminalLogFile: string;
+};
 
 /**
  * Builds the UserPromptSubmit-hook command that prints the live IDE context file —
@@ -46,8 +140,14 @@ export class IdeContextTracker implements vscode.Disposable {
   private lastEditor: vscode.TextEditor | undefined;
   private debugErrors = "";
   private debugSessionLabel: string | undefined;
+  private debugLocation: string | undefined;
+  private readonly debugLog: CappedLogFile;
+  private readonly terminalLog: CappedLogFile;
+  private readonly runningExecutions = new Map<vscode.TerminalShellExecution, RunningExecution>();
 
-  constructor(private readonly contextFile: string) {
+  constructor(private readonly files: IdeContextFiles) {
+    this.debugLog = new CappedLogFile(files.debugLogFile);
+    this.terminalLog = new CappedLogFile(files.terminalLogFile);
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(() => this.scheduleWrite()),
       vscode.window.onDidChangeTextEditorSelection((event) => {
@@ -64,13 +164,25 @@ export class IdeContextTracker implements vscode.Disposable {
       // first's errors - accepted for simplicity, that's an uncommon setup.
       vscode.debug.onDidStartDebugSession((session) => {
         this.debugErrors = "";
+        this.debugLog.reset();
+        this.debugLocation = undefined;
         this.debugSessionLabel = `${session.name} (${session.type})`;
         this.scheduleWrite();
       }),
+      vscode.debug.onDidChangeActiveStackItem(() => void this.updateDebugLocation()),
       vscode.debug.registerDebugAdapterTrackerFactory("*", {
         createDebugAdapterTracker: (session) => ({
           onDidSendMessage: (message) => this.onDebugMessage(session, message)
         })
+      }),
+      vscode.window.onDidStartTerminalShellExecution((event) => void this.readExecution(event)),
+      vscode.window.onDidEndTerminalShellExecution((event) => {
+        const running = this.runningExecutions.get(event.execution);
+        if (running) {
+          running.ended = true;
+          running.exitCode = event.exitCode;
+          this.appendFinishedExecution(event.execution, running);
+        }
       })
     );
     this.scheduleWrite();
@@ -78,14 +190,116 @@ export class IdeContextTracker implements vscode.Disposable {
 
   private onDebugMessage(session: vscode.DebugSession, message: unknown): void {
     const event = message as { type?: string; event?: string; body?: { category?: string; output?: string } };
-    if (event.type !== "event" || event.event !== "output" || event.body?.category !== "stderr") {
+    if (event.type !== "event" || event.event !== "output") {
       return;
     }
-    this.debugSessionLabel = `${session.name} (${session.type})`;
-    this.debugErrors += event.body.output ?? "";
-    if (this.debugErrors.length > MAX_DEBUG_ERROR_CHARS) {
-      this.debugErrors = this.debugErrors.slice(-MAX_DEBUG_ERROR_CHARS);
+    // The protocol defaults an omitted category to "console"; only telemetry is noise
+    // meant for the adapter's own reporting rather than for the user.
+    const category = event.body?.category ?? "console";
+    if (category === "telemetry") {
+      return;
     }
+    const output = event.body?.output ?? "";
+    this.debugSessionLabel = `${session.name} (${session.type})`;
+
+    this.debugLog.append(output);
+
+    // stderr additionally goes inline, so real errors reach the agent without it
+    // having to open the log file first.
+    if (category === "stderr") {
+      this.debugErrors += output;
+      if (this.debugErrors.length > MAX_DEBUG_ERROR_CHARS) {
+        this.debugErrors = this.debugErrors.slice(-MAX_DEBUG_ERROR_CHARS);
+      }
+    }
+    this.scheduleWrite();
+  }
+
+  /**
+   * `read()` only yields data written after the first call, so the stream has to be
+   * taken in the start event itself rather than when the command ends. Output is held
+   * per execution and appended as one block, because two terminals producing output at
+   * the same time would otherwise interleave into something unreadable.
+   */
+  private async readExecution(event: vscode.TerminalShellExecutionStartEvent): Promise<void> {
+    const running: RunningExecution = {
+      commandLine: event.execution.commandLine.value,
+      terminalName: event.terminal.name,
+      output: "",
+      drained: false,
+      ended: false,
+      exitCode: undefined
+    };
+    this.runningExecutions.set(event.execution, running);
+
+    for await (const chunk of event.execution.read()) {
+      running.output += chunk;
+      // A runaway command would otherwise be held in full before it ever ends.
+      if (running.output.length > MAX_LOG_CHARS) {
+        running.output = running.output.slice(-MAX_LOG_CHARS);
+      }
+    }
+    running.drained = true;
+    this.appendFinishedExecution(event.execution, running);
+  }
+
+  /**
+   * The stream can drain before or after the end event fires, and the exit code only
+   * comes with the latter - so whichever happens last writes the block.
+   */
+  private appendFinishedExecution(
+    execution: vscode.TerminalShellExecution,
+    running: RunningExecution
+  ): void {
+    if (!running.drained || !running.ended) {
+      return;
+    }
+    this.runningExecutions.delete(execution);
+
+    const command = running.commandLine.trim() || "(command unknown)";
+    const exit = running.exitCode === undefined ? "unknown" : running.exitCode;
+    this.terminalLog.append(
+      `$ ${command}    [${running.terminalName}]\n` +
+        `${cleanTerminalOutput(running.output).trim()}\n` +
+        `[exit ${exit}]\n\n`
+    );
+    this.scheduleWrite();
+  }
+
+  /**
+   * Resolves the focused stack frame to a source location. `DebugStackFrame` carries
+   * only protocol ids, so the location has to be requested from the adapter; the
+   * result is cached because renderContext() is synchronous. A focused `DebugThread`
+   * means the session is running rather than paused, so it has no location to show.
+   */
+  private async updateDebugLocation(): Promise<void> {
+    const item = vscode.debug.activeStackItem;
+    if (!(item instanceof vscode.DebugStackFrame)) {
+      this.debugLocation = undefined;
+      this.scheduleWrite();
+      return;
+    }
+
+    type StackFrame = { id: number; name: string; line: number; source?: { path?: string } };
+    let frame: StackFrame | undefined;
+    try {
+      // Omitting `levels` returns the full stack - the user can focus any frame,
+      // not just the topmost one.
+      const response = (await item.session.customRequest("stackTrace", {
+        threadId: item.threadId
+      })) as { stackFrames?: StackFrame[] };
+      frame = response.stackFrames?.find((candidate) => candidate.id === item.frameId);
+    } catch {
+      // The session can end while the request is in flight.
+    }
+
+    if (frame?.source?.path) {
+      const relativePath = vscode.workspace.asRelativePath(vscode.Uri.file(frame.source.path), false);
+      this.debugLocation = `${relativePath}:${frame.line} in ${frame.name}`;
+    } else {
+      this.debugLocation = frame?.name;
+    }
+    this.debugSessionLabel = `${item.session.name} (${item.session.type})`;
     this.scheduleWrite();
   }
 
@@ -104,10 +318,23 @@ export class IdeContextTracker implements vscode.Disposable {
     if (editor && editor.document.uri.scheme === "file") {
       this.lastEditor = editor;
     }
+    this.debugLog.flush();
+    this.terminalLog.flush();
+
     fs.promises
       .writeFile(
-        this.contextFile,
-        CONTEXT_FILE_BOM + renderContext(this.lastEditor, this.debugErrors, this.debugSessionLabel)
+        this.files.contextFile,
+        CONTEXT_FILE_BOM +
+          renderContext(
+            this.lastEditor,
+            {
+              sessionLabel: this.debugSessionLabel,
+              location: this.debugLocation,
+              errors: this.debugErrors,
+              log: { file: this.files.debugLogFile, chars: this.debugLog.chars }
+            },
+            { file: this.files.terminalLogFile, chars: this.terminalLog.chars }
+          )
       )
       .catch((error) => console.error("[sbc] failed to write ide context:", error));
   }
@@ -122,10 +349,20 @@ export class IdeContextTracker implements vscode.Disposable {
   }
 }
 
+/** A log file the agent is told about rather than shown. */
+type LogPointer = { file: string; chars: number };
+
+type DebugContext = {
+  sessionLabel: string | undefined;
+  location: string | undefined;
+  errors: string;
+  log: LogPointer;
+};
+
 function renderContext(
   editor: vscode.TextEditor | undefined,
-  debugErrors: string,
-  debugSessionLabel: string | undefined
+  debug: DebugContext,
+  terminalLog: LogPointer
 ): string {
   const lines = ["<ide_context>"];
 
@@ -249,12 +486,30 @@ function renderContext(
     }
   }
 
-  if (debugErrors) {
-    const truncated = debugErrors.length >= MAX_DEBUG_ERROR_CHARS;
+  if (terminalLog.chars > 0) {
     lines.push(
-      `Recent debug session errors (stderr) - ${debugSessionLabel}:`,
+      `Output of commands run in VS Code terminals (${Math.ceil(terminalLog.chars / 1024)} KB): ${terminalLog.file}`,
+      "Read that file when the user asks about a command they ran, e.g. a failing test or build."
+    );
+  }
+
+  if (debug.location) {
+    lines.push(`Debug session paused at ${debug.location} - ${debug.sessionLabel}`);
+  }
+
+  if (debug.log.chars > 0) {
+    lines.push(
+      `Full debug output of this session (${Math.ceil(debug.log.chars / 1024)} KB, all streams): ${debug.log.file}`,
+      "Read that file when the user asks about the debug run; only stderr is included inline below."
+    );
+  }
+
+  if (debug.errors) {
+    const truncated = debug.errors.length >= MAX_DEBUG_ERROR_CHARS;
+    lines.push(
+      `Recent debug session errors (stderr) - ${debug.sessionLabel}:`,
       "```",
-      (truncated ? "... [truncated, showing most recent]\n" : "") + debugErrors,
+      (truncated ? "... [truncated, showing most recent]\n" : "") + debug.errors,
       "```"
     );
   }

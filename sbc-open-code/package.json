@@ -13,7 +13,7 @@
   },
   "icon": "media/marketplace-icon.png",
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.93.0"
   },
   "categories": ["AI"],
   "keywords": ["opencode", "ai", "agent", "terminal", "console", "sidebar", "chat", "cli", "assistant", "coding agent", "llm"],
@@ -34,7 +34,8 @@
         {
           "id": "sbc-opencode.view",
           "name": "SBC OPEN CODE",
-          "type": "webview"
+          "type": "webview",
+          "icon": "media/icon.svg"
         }
       ]
     },

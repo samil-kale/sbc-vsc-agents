@@ -65,12 +65,71 @@ export const claudeSessionProvider: SessionProvider = {
     }
     const line = JSON.stringify({ type: "custom-title", customTitle: trimmed, sessionId }) + "\n";
     await fs.promises.appendFile(path.join(projectDir, `${sessionId}.jsonl`), line);
+  },
+
+  /**
+   * Watches the project's transcripts. Non-recursive on purpose: a write inside a
+   * session's own `subagents/` subdirectory then doesn't fire at all, and the directory
+   * entries that do fire are filtered out by extension - only the transcripts we list
+   * are of interest.
+   *
+   * Two-stage because the project directory doesn't exist until Claude first writes a
+   * transcript there, and fs.watch throws ENOENT on a missing one: until then, watch the
+   * projects root (which does report the new directory appearing) and arm the real
+   * watcher once it shows up.
+   */
+  watch(_executable: string, cwd: string, onChange: () => void): () => void {
+    let projectWatcher: fs.FSWatcher | undefined;
+    let rootWatcher: fs.FSWatcher | undefined;
+    let stopped = false;
+
+    const armProjectWatcher = async (): Promise<void> => {
+      if (stopped || projectWatcher) {
+        return;
+      }
+      // Rejects when the projects root itself is absent (Claude never ran here) - that's
+      // the normal starting state for a fresh install, not a failure worth reporting.
+      const projectDir = await findProjectDir(cwd).catch(() => undefined);
+      if (!projectDir || stopped || projectWatcher) {
+        return;
+      }
+      projectWatcher = fs.watch(projectDir, (_eventType, filename) => {
+        // A null filename means "something here changed" on platforms that don't report
+        // it - reconciling then is the safe read.
+        if (filename === null || filename.endsWith(".jsonl")) {
+          onChange();
+        }
+      });
+      rootWatcher?.close();
+      rootWatcher = undefined;
+    };
+
+    void armProjectWatcher().then(() => {
+      if (stopped || projectWatcher) {
+        return;
+      }
+      try {
+        rootWatcher = fs.watch(projectsRoot(), () => void armProjectWatcher());
+      } catch {
+        // Claude has never run on this machine - nothing to watch, listing stays polled.
+      }
+    });
+
+    return () => {
+      stopped = true;
+      projectWatcher?.close();
+      rootWatcher?.close();
+    };
   }
 };
 
-async function findProjectDir(cwd: string): Promise<string | undefined> {
+function projectsRoot(): string {
   const configDir = process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
-  const projectsDir = path.join(configDir, "projects");
+  return path.join(configDir, "projects");
+}
+
+async function findProjectDir(cwd: string): Promise<string | undefined> {
+  const projectsDir = projectsRoot();
   const encoded = cwd.replace(/[^a-zA-Z0-9]/g, "-");
   // Windows paths are case-insensitive and the CLI preserves whatever casing it saw,
   // so the same project can have differently-cased directories there.

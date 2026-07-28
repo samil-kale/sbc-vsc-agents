@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
 import { buildNotifyCommand } from "@shared/os-notify";
-import { buildReadContextCommand, IdeContextTracker } from "@shared/ide-context";
+import {
+  buildReadContextCommand,
+  debugLogFilePath,
+  IdeContextTracker,
+  terminalLogFilePath
+} from "@shared/ide-context";
 import { createByteThresholdCheck } from "@shared/session-ready";
 
 /**
@@ -25,6 +30,8 @@ export function setupClaudeHooks(
   fs.mkdirSync(storageDir, { recursive: true });
 
   const contextFile = path.join(storageDir, "ide-context.md");
+  const debugLogFile = debugLogFilePath(storageDir);
+  const terminalLogFile = terminalLogFilePath(storageDir);
   const readContextCommand = buildReadContextCommand(storageDir, contextFile);
 
   const hooks: Record<string, unknown> = {
@@ -89,12 +96,18 @@ export function setupClaudeHooks(
     ];
   }
 
+  // The context block points the agent at these logs, which live in the storage dir -
+  // outside the workspace, where reads are denied unless granted. Scoped to the two
+  // files rather than the whole dir, which also holds the notify scripts and this
+  // settings file.
+  const permissions = { allow: [`Read(${debugLogFile})`, `Read(${terminalLogFile})`] };
+
   const settingsFile = path.join(storageDir, "sbc-hooks-settings.json");
-  fs.writeFileSync(settingsFile, JSON.stringify({ hooks }, null, 2));
+  fs.writeFileSync(settingsFile, JSON.stringify({ hooks, permissions }, null, 2));
 
   return {
     args: ["--settings", settingsFile],
-    disposable: new IdeContextTracker(contextFile),
+    disposable: new IdeContextTracker({ contextFile, debugLogFile, terminalLogFile }),
     // Tuned empirically: unlike opencode, Claude Code doesn't seem to draw an early
     // splash/connecting frame before its real UI, so no grace period is needed - 500
     // sits comfortably above its small startup handshake (well under 150 bytes) and

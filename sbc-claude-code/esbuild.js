@@ -27,7 +27,7 @@ const extensionConfig = {
   bundle: true,
   outfile: path.join(__dirname, "dist", "extension.js"),
   platform: "node",
-  target: "node18",
+  target: "node20",
   format: "cjs",
   external: ["vscode"],
   plugins: [nodePtyPlugin],

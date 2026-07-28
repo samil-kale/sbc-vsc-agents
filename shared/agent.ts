@@ -36,6 +36,16 @@ export interface HooksSetup {
   createIsSessionReady?: () => (chunk: string, elapsedMs: number) => boolean;
 }
 
+/**
+ * Result of an agent's async spawn preparation - see AgentConfig.prepareSpawn. `args` and
+ * `env` are merged into every session the manager starts, `dispose` runs at shutdown.
+ */
+export interface SpawnPreparation {
+  args: string[];
+  env?: Record<string, string>;
+  dispose(): void;
+}
+
 export interface AgentSessionInfo {
   /** Agent-native session id (Claude: transcript uuid; opencode: "ses_..."). */
   id: string;
@@ -66,6 +76,13 @@ export interface SessionProvider {
   remove(executable: string, cwd: string, sessionId: string): Promise<void>;
   /** Renames the session's persisted title. Rejects on failure (caller surfaces the error). */
   rename(executable: string, cwd: string, sessionId: string, title: string): Promise<void>;
+  /**
+   * Optional: calls `onChange` whenever this workspace's sessions change, so the manager
+   * can re-list right away instead of waiting out its polling. Returns a stop function,
+   * called on shutdown - an implementation that owns a process or connection tears it
+   * down there.
+   */
+  watch?(executable: string, cwd: string, onChange: () => void): () => void;
 }
 
 export interface AgentConfig {
@@ -88,4 +105,11 @@ export interface AgentConfig {
   ) => HooksSetup;
   /** Session enumeration/resume/deletion; missing provider means "no sessions found". */
   sessions?: SessionProvider;
+  /**
+   * Async setup that has to finish before any session is spawned, for agents whose spawn
+   * arguments aren't known up front - opencode brings up the server its TUI then attaches
+   * to, and only then knows the URL. Awaited during bootstrap, ahead of the first tab
+   * being posted, so the webview can't ask for a terminal before it resolves.
+   */
+  prepareSpawn?: (executable: string, cwd: string) => Promise<SpawnPreparation>;
 }
