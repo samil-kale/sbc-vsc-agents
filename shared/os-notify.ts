@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const WIN_BOM = "﻿";
+export const WIN_BOM = "﻿";
 
 /**
  * Builds a Claude Code hook command that shows a native OS notification. Uses each

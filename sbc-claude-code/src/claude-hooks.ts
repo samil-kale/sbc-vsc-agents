@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentConfig, HooksSetup, NotificationSettings } from "@shared/agent";
-import { buildNotifyCommand } from "@shared/os-notify";
+import { buildNotifyCommand, WIN_BOM } from "@shared/os-notify";
 import {
   buildReadContextCommand,
   debugLogFilePath,
@@ -13,13 +13,91 @@ import {
 import { createByteThresholdCheck } from "@shared/session-ready";
 
 /**
+ * Marks (via a session-keyed file dropped in storageDir) that the current turn
+ * launched a subagent (Task tool, exposed to Claude as `Agent`) - Stop then reads it
+ * to decide whether to notify. Session-keyed rather than global because every tab
+ * shares the same --settings file and could otherwise stomp on each other's marker.
+ */
+function buildMarkSubagentStartedCommand(storageDir: string): string {
+  if (process.platform === "win32") {
+    const scriptFile = path.join(storageDir, "mark-subagent.ps1");
+    fs.writeFileSync(
+      scriptFile,
+      WIN_BOM +
+        `$storageDir = $args[0]
+$json = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$marker = Join-Path $storageDir "subagent-started-$($json.session_id)"
+New-Item -ItemType File -Force -Path $marker | Out-Null
+`
+    );
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}" "${storageDir}"`;
+  }
+  const scriptFile = path.join(storageDir, "mark-subagent.sh");
+  fs.writeFileSync(
+    scriptFile,
+    `#!/bin/sh
+storage_dir="$1"
+json=$(cat)
+session_id=$(printf '%s' "$json" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+touch "$storage_dir/subagent-started-$session_id"
+`
+  );
+  return `sh "${scriptFile}" "${storageDir}"`;
+}
+
+/**
+ * Wraps a Stop notify command so it only runs when the turn that just ended didn't
+ * launch a subagent. Without this, Stop fires on every turn boundary - including the
+ * one that merely kicks off a background Task and returns immediately - so "Finished"
+ * would show up while a subagent is still working, not when the work is actually done.
+ * Consumes (deletes) the marker either way, so the next subagent-free Stop notifies.
+ */
+function buildStopGuardCommand(storageDir: string, notifyCommand: string): string {
+  if (process.platform === "win32") {
+    const scriptFile = path.join(storageDir, "stop-guard.ps1");
+    fs.writeFileSync(
+      scriptFile,
+      WIN_BOM +
+        `try {
+  $storageDir = $args[0]
+  $json = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  $marker = Join-Path $storageDir "subagent-started-$($json.session_id)"
+  if (Test-Path $marker) {
+    Remove-Item $marker -Force -ErrorAction SilentlyContinue
+    exit 0
+  }
+} catch {}
+${notifyCommand}
+`
+    );
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}" "${storageDir}"`;
+  }
+  const scriptFile = path.join(storageDir, "stop-guard.sh");
+  fs.writeFileSync(
+    scriptFile,
+    `#!/bin/sh
+storage_dir="$1"
+json=$(cat)
+session_id=$(printf '%s' "$json" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
+marker="$storage_dir/subagent-started-$session_id"
+if [ -f "$marker" ]; then
+  rm -f "$marker"
+  exit 0
+fi
+${notifyCommand}
+`
+  );
+  return `sh "${scriptFile}" "${storageDir}"`;
+}
+
+/**
  * Wires up sbc's Claude Code hook integrations: a UserPromptSubmit hook that injects
  * live editor state into every prompt, and native OS notifications for the moments a
- * user typically wants to be pulled back to the sidebar — the agent finishing
- * (Stop), a blocking mid-turn prompt (Notification/PreToolUse), and an idle reminder
- * (Notification). Everything is scoped to a per-spawn --settings file — it never
- * touches the user's own ~/.claude/settings.json or the OS (no registry writes, no
- * installs).
+ * user typically wants to be pulled back to the sidebar — the agent finishing with no
+ * subagent left running (Stop, guarded - see buildStopGuardCommand), a blocking
+ * mid-turn prompt (Notification/PreToolUse), and an idle reminder (Notification).
+ * Everything is scoped to a per-spawn --settings file — it never touches the user's
+ * own ~/.claude/settings.json or the OS (no registry writes, no installs).
  */
 export function setupClaudeHooks(
   context: vscode.ExtensionContext,
@@ -43,14 +121,15 @@ export function setupClaudeHooks(
   const name = agent.displayName;
 
   if (notifications.finished) {
+    const stopNotifyCommand = buildNotifyCommand(
+      storageDir,
+      "stop",
+      `${name}: Finished`,
+      `Finished in ${workspaceName}`
+    );
     hooks.Stop = [
       {
-        hooks: [
-          {
-            type: "command",
-            command: buildNotifyCommand(storageDir, "stop", `${name}: Finished`, `Finished in ${workspaceName}`)
-          }
-        ]
+        hooks: [{ type: "command", command: buildStopGuardCommand(storageDir, stopNotifyCommand) }]
       }
     ];
   }
@@ -79,23 +158,26 @@ export function setupClaudeHooks(
     }));
   }
 
+  const preToolUseMatchers: { matcher: string; command: string }[] = [];
+  if (notifications.finished) {
+    preToolUseMatchers.push({ matcher: "Agent", command: buildMarkSubagentStartedCommand(storageDir) });
+  }
   if (notifications.needsYou) {
-    hooks.PreToolUse = [
-      {
-        matcher: "AskUserQuestion",
-        hooks: [
-          {
-            type: "command",
-            command: buildNotifyCommand(
-              storageDir,
-              "question",
-              `${name}: Question`,
-              `Waiting for your answer in ${workspaceName}`
-            )
-          }
-        ]
-      }
-    ];
+    preToolUseMatchers.push({
+      matcher: "AskUserQuestion",
+      command: buildNotifyCommand(
+        storageDir,
+        "question",
+        `${name}: Question`,
+        `Waiting for your answer in ${workspaceName}`
+      )
+    });
+  }
+  if (preToolUseMatchers.length > 0) {
+    hooks.PreToolUse = preToolUseMatchers.map(({ matcher, command }) => ({
+      matcher,
+      hooks: [{ type: "command", command }]
+    }));
   }
 
   // The context block points the agent at these files, which live in the storage dir -
