@@ -52,8 +52,8 @@ function titleUnsettled(tab: TabState): boolean {
 
 /** The webview's view of a tab - everything the host tracks beyond this stays internal. */
 function toDescriptor(tab: TabState): TabDescriptor {
-  const { tabId, title, updatedAt, status, sessionId } = tab;
-  return { tabId, title, updatedAt, status, hasSession: sessionId !== undefined };
+  const { tabId, title, updatedAt, createdAt, status, sessionId } = tab;
+  return { tabId, title, updatedAt, createdAt, status, hasSession: sessionId !== undefined };
 }
 
 export class AgentSessionManager {
@@ -136,27 +136,43 @@ export class AgentSessionManager {
         );
       }
 
-      const [mostRecent, ...rest] = sessionInfos;
+      // The tab the user was last working in - not necessarily first in sessionInfos,
+      // which is ordered by creation instead (see AgentSessionInfo.createdAt) so that a
+      // restart doesn't reshuffle the tab bar into most-recently-used order.
+      let mostRecent: (typeof sessionInfos)[number] | undefined;
+      for (const info of sessionInfos) {
+        if (!mostRecent || info.updatedAt > mostRecent.updatedAt) {
+          mostRecent = info;
+        }
+      }
       const activeTab = this.createPendingTab();
       if (mostRecent) {
         activeTab.sessionId = mostRecent.id;
         activeTab.title = mostRecent.title;
         activeTab.updatedAt = mostRecent.updatedAt;
+        activeTab.createdAt = mostRecent.createdAt;
         activeTab.provisionalTitle = mostRecent.provisionalTitle;
       }
       this.tabs = [activeTab];
       this.activeTabId = activeTab.tabId;
       this.postTabsSnapshot();
 
-      const remainingTabs: TabState[] = rest.map((info) => ({
-        tabId: info.id,
-        sessionId: info.id,
-        title: info.title,
-        updatedAt: info.updatedAt,
-        provisionalTitle: info.provisionalTitle,
-        status: this.canStartSessions ? "ready" : "missing"
-      }));
-      this.tabs.push(...remainingTabs);
+      const orderedTabs: TabState[] = sessionInfos.map((info) =>
+        info === mostRecent
+          ? activeTab
+          : {
+              tabId: info.id,
+              sessionId: info.id,
+              title: info.title,
+              updatedAt: info.updatedAt,
+              createdAt: info.createdAt,
+              provisionalTitle: info.provisionalTitle,
+              status: this.canStartSessions ? "ready" : "missing"
+            }
+      );
+      if (orderedTabs.length > 0) {
+        this.tabs = orderedTabs;
+      }
       this.postTabsSnapshot();
       // Started after the initial listing so its first event can't race the bootstrap.
       this.stopWatching = agent.sessions?.watch?.(agentPath, workspaceRoot, () =>
@@ -475,6 +491,7 @@ export class AgentSessionManager {
       tab.sessionId = match.id;
       tab.title = match.title;
       tab.updatedAt = match.updatedAt;
+      tab.createdAt = match.createdAt;
       tab.provisionalTitle = match.provisionalTitle;
       // Detached tabs are gone from the UI - claiming their id is all that's needed.
       if (this.tabs.includes(tab)) {

@@ -28,6 +28,16 @@ const SEPARATOR = "separator";
 
 type ContextMenuEntry = ContextMenuAction | typeof SEPARATOR;
 
+/** ISO 8601 date/time, space instead of "T", local time, seconds precision. */
+function formatIso(ms: number): string {
+  const date = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    ` ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
 /**
  * DOM-only tab strip mimicking VS Code's editor tabs. Callbacks report user intent;
  * the actual activation (showing a terminal, notifying the host) happens in main.ts,
@@ -306,7 +316,11 @@ export class TabBar {
         element.dataset.status = tab.status;
         element.classList.toggle("active", tab.tabId === this.activeTabId);
         const label = tab.title || "New session";
-        element.title = tab.updatedAt ? `${label}\nLast activity: ${new Date(tab.updatedAt).toLocaleString()}` : label;
+        const details = [
+          tab.createdAt ? `Created: ${formatIso(tab.createdAt)}` : undefined,
+          tab.updatedAt ? `Updated: ${formatIso(tab.updatedAt)}` : undefined
+        ].filter((line): line is string => line !== undefined);
+        element.title = details.length > 0 ? `${label}\n${details.join("\n")}` : label;
         element.addEventListener("click", () => this.callbacks.onSelect(tab.tabId));
         // Keeps the terminal focused across the whole right-click interaction: without
         // this, mousedown's default focus handling blurs xterm's textarea (the tab isn't

@@ -53,6 +53,8 @@ export interface AgentSessionInfo {
   title: string;
   /** Last activity, ms since epoch (Claude: transcript mtime; opencode: `updated`). */
   updatedAt: number;
+  /** When the session was created, ms since epoch (Claude: first timestamped transcript entry; opencode: `time.created`) - determines tab order, independent of `updatedAt`. */
+  createdAt: number;
   /**
    * True while `title` is only standing in for a name the agent hasn't assigned yet
    * (Claude: the first prompt, shown until an agent-name/ai-title lands). Those arrive
@@ -68,7 +70,7 @@ export interface AgentSessionInfo {
  * (Claude: transcript files on disk; opencode: `session list` / `session delete`).
  */
 export interface SessionProvider {
-  /** All sessions of this workspace, newest first. Must resolve [] on any failure. */
+  /** All sessions of this workspace, in creation order (oldest first). Must resolve [] on any failure. */
   list(executable: string, cwd: string): Promise<AgentSessionInfo[]>;
   /** CLI args that open the given session. */
   resumeArgs(sessionId: string): string[];

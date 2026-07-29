@@ -7,6 +7,8 @@ export interface TabDescriptor {
   title: string;
   /** Last activity, ms since epoch; absent for pending "New session" tabs. */
   updatedAt?: number;
+  /** When the session was created, ms since epoch; absent for pending "New session" tabs. */
+  createdAt?: number;
   status: SessionStatus;
   /** Whether the agent has persisted a session for this tab yet. False means there is
    * nothing to rename (see AgentSessionManager.renameTab), so the UI offers no rename. */

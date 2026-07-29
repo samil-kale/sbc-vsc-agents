@@ -12,7 +12,7 @@ export const opencodeSessionProvider: SessionProvider = {
       const entries = (await (await server.request("/session", cwd)).json()) as {
         id?: unknown;
         title?: unknown;
-        time?: { updated?: unknown };
+        time?: { updated?: unknown; created?: unknown };
       }[];
       return entries
         .flatMap((entry) =>
@@ -21,12 +21,13 @@ export const opencodeSessionProvider: SessionProvider = {
                 {
                   id: entry.id,
                   title: typeof entry.title === "string" ? entry.title : "",
-                  updatedAt: typeof entry.time?.updated === "number" ? entry.time.updated : 0
+                  updatedAt: typeof entry.time?.updated === "number" ? entry.time.updated : 0,
+                  createdAt: typeof entry.time?.created === "number" ? entry.time.created : 0
                 }
               ]
             : []
         )
-        .sort((a, b) => b.updatedAt - a.updatedAt);
+        .sort((a, b) => a.createdAt - b.createdAt);
     } catch (error) {
       console.error("[sbc] opencode session listing failed:", error);
       return [];

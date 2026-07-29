@@ -36,6 +36,26 @@ is down to one job: appending the IDE context in `chat.message`. There is no HTT
 equivalent for that hook — everything else it used to do (OS notifications) now comes
 from the event stream in the extension host.
 
+## Claude Code session titles (`extractTitle`)
+
+`extractTitle` in `sbc-claude-code/src/sessions.ts` resolves a session's display title
+the same way Claude Code's own `/resume` list does — verified against the CLI's actual
+behavior, including precedence order. Don't change its scanning logic casually; a
+regression here silently shows the wrong tab title with nothing to catch it (no tests,
+no schema).
+
+Precedence: a `custom-title` entry (from `/rename`, appended at the file's true end —
+found via a tail scan, and returned early, skipping the head-scan below entirely) beats
+`agent-name`, then `ai-title`, then `summary` (only appears after `/compact`), then
+falls back to the first prompt the user typed. For the three middle types, the *last*
+occurrence within the scanned head window wins (a later one supersedes an earlier one);
+for `summary` and the first prompt, the *first* occurrence wins.
+
+Because of the custom-title early return, no other per-session data can be piggybacked
+onto this function's scan without checking whether renamed sessions still need it — they
+skip the loop entirely. `extractCreatedAt` (same file) deliberately stays a separate scan
+for exactly this reason, even though it re-reads the same file's head.
+
 ## Cross-platform requirement
 
 Must work on Windows, Linux, macOS. Never add OS-specific behavior without an

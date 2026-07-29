@@ -17,20 +17,20 @@ export const claudeSessionProvider: SessionProvider = {
         return [];
       }
       const files = (await fs.promises.readdir(projectDir)).filter((file) => file.endsWith(".jsonl"));
-      const stats = await Promise.all(
-        files.map(async (file) => ({
-          id: file.slice(0, -".jsonl".length),
-          filePath: path.join(projectDir, file),
-          mtime: (await fs.promises.stat(path.join(projectDir, file))).mtimeMs
-        }))
-      );
-      stats.sort((a, b) => b.mtime - a.mtime);
-      return await Promise.all(
-        stats.map(async ({ id, filePath, mtime }) => {
-          const { title, provisional } = await extractTitle(filePath, id);
-          return { id, title, updatedAt: mtime, provisionalTitle: provisional };
+      const entries = await Promise.all(
+        files.map(async (file) => {
+          const id = file.slice(0, -".jsonl".length);
+          const filePath = path.join(projectDir, file);
+          const [{ title, provisional }, mtime, createdAt] = await Promise.all([
+            extractTitle(filePath, id),
+            fs.promises.stat(filePath).then((s) => s.mtimeMs),
+            extractCreatedAt(filePath)
+          ]);
+          return { id, title, updatedAt: mtime, provisionalTitle: provisional, createdAt: createdAt ?? mtime };
         })
       );
+      entries.sort((a, b) => a.createdAt - b.createdAt);
+      return entries;
     } catch (error) {
       console.error("[sbc] claude session listing failed:", error);
       return [];
@@ -209,6 +209,42 @@ async function extractTitle(filePath: string, sessionId: string): Promise<Resolv
   const assigned = agentName ?? aiTitle ?? summary;
   const title = assigned ?? firstPrompt;
   return { title: title ? truncateTitle(title) : "", provisional: assigned === undefined };
+}
+
+/**
+ * A transcript's own first timestamped entry is a far more stable "created" signal than
+ * the file's mtime, which shifts on every append. Deliberately kept independent of
+ * extractTitle above (rather than folded into its scan): that function returns early
+ * once it finds a custom-title, skipping its head-scan entirely - reusing it here would
+ * silently leave every renamed session without a createdAt. See CLAUDE.md for why
+ * extractTitle's scan must stay untouched.
+ */
+async function extractCreatedAt(filePath: string): Promise<number | undefined> {
+  const stream = fs.createReadStream(filePath, { encoding: "utf8", end: TITLE_SCAN_BYTE_LIMIT });
+  const lines = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(line) as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      const timestamp = nonEmptyString(entry.timestamp);
+      if (timestamp) {
+        const ms = Date.parse(timestamp);
+        if (!Number.isNaN(ms)) {
+          return ms;
+        }
+      }
+    }
+  } catch (error) {
+    console.error("[sbc] claude createdAt extraction failed:", error);
+  } finally {
+    lines.close();
+    stream.destroy();
+  }
+  return undefined;
 }
 
 /**
