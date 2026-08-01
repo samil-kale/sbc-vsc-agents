@@ -205,8 +205,8 @@ body {
    classes) so this override actually wins the cascade instead of losing to it
    despite loading later in the document. */
 .xterm .xterm-viewport {
-  background-color: var(--vscode-editor-background);
   overflow: hidden;
+  background-color: transparent;
 }
 
 /* The CLIs we host (Claude Code, opencode) render their entire UI in the
