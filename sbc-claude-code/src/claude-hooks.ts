@@ -13,44 +13,27 @@ import {
 import { createByteThresholdCheck } from "@shared/session-ready";
 
 /**
- * Marks (via a session-keyed file dropped in storageDir) that the current turn
- * launched a subagent (Task tool, exposed to Claude as `Agent`) - Stop then reads it
- * to decide whether to notify. Session-keyed rather than global because every tab
- * shares the same --settings file and could otherwise stomp on each other's marker.
- */
-function buildMarkSubagentStartedCommand(storageDir: string): string {
-  if (process.platform === "win32") {
-    const scriptFile = path.join(storageDir, "mark-subagent.ps1");
-    fs.writeFileSync(
-      scriptFile,
-      WIN_BOM +
-        `$storageDir = $args[0]
-$json = [Console]::In.ReadToEnd() | ConvertFrom-Json
-$marker = Join-Path $storageDir "subagent-started-$($json.session_id)"
-New-Item -ItemType File -Force -Path $marker | Out-Null
-`
-    );
-    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}" "${storageDir}"`;
-  }
-  const scriptFile = path.join(storageDir, "mark-subagent.sh");
-  fs.writeFileSync(
-    scriptFile,
-    `#!/bin/sh
-storage_dir="$1"
-json=$(cat)
-session_id=$(printf '%s' "$json" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
-touch "$storage_dir/subagent-started-$session_id"
-`
-  );
-  return `sh "${scriptFile}" "${storageDir}"`;
-}
-
-/**
- * Wraps a Stop notify command so it only runs when the turn that just ended didn't
- * launch a subagent. Without this, Stop fires on every turn boundary - including the
- * one that merely kicks off a background Task and returns immediately - so "Finished"
- * would show up while a subagent is still working, not when the work is actually done.
- * Consumes (deletes) the marker either way, so the next subagent-free Stop notifies.
+ * Wraps a Stop notify command so it only runs once nothing the turn kicked off is
+ * still working. Stop fires on every turn boundary - including one that merely
+ * launches a background subagent or shell command and returns immediately - so
+ * unguarded, "Finished" shows up while that work is still running.
+ *
+ * The Stop payload carries a `background_tasks` array for exactly this: every still
+ * pending job, each with an `id`, a `type` (`subagent` for Task/Agent runs, `shell`
+ * for Bash calls made with run_in_background) and a `status`. Verified against Claude
+ * Code 2.1.220 by logging real hook payloads: a turn that leaves a background sleep
+ * and a subagent running reports both as `running`, later Stops report only what is
+ * still outstanding, and the final Stop reports an empty list.
+ *
+ * Reading it beats tracking state ourselves (a marker file set on PreToolUse) because
+ * it needs no bookkeeping that can drift: no counting of launches against turn
+ * boundaries, nothing to leak when two jobs finish inside one wake-up, and no
+ * per-session marker to key. It is simply the runtime's own answer to "is anything
+ * still running", asked at the only moment we care.
+ *
+ * Deliberately narrow: it suppresses only on `status: running`. An unknown status
+ * therefore notifies rather than staying silent - a spurious notification is a far
+ * better failure than a job stuck in the list silencing every future one.
  */
 function buildStopGuardCommand(storageDir: string, notifyCommand: string): string {
   if (process.platform === "win32") {
@@ -59,42 +42,48 @@ function buildStopGuardCommand(storageDir: string, notifyCommand: string): strin
       scriptFile,
       WIN_BOM +
         `try {
-  $storageDir = $args[0]
   $json = [Console]::In.ReadToEnd() | ConvertFrom-Json
-  $marker = Join-Path $storageDir "subagent-started-$($json.session_id)"
-  if (Test-Path $marker) {
-    Remove-Item $marker -Force -ErrorAction SilentlyContinue
+  # The @() must wrap the whole pipeline, not just the input: PowerShell 5.1 returns a
+  # bare object rather than a 1-element array when Where-Object matches exactly once,
+  # and a bare object has no .Count - so $running.Count silently yields $null and the
+  # comparison below turns false. That is the single-subagent case, i.e. the common
+  # one. The $_ test drops the lone $null that piping an absent field would pass on.
+  $running = @($json.background_tasks | Where-Object { $_ -and $_.status -eq "running" })
+  if ($running.Count -gt 0) {
     exit 0
   }
 } catch {}
 ${notifyCommand}
 `
     );
-    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}" "${storageDir}"`;
+    return `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptFile}"`;
   }
   const scriptFile = path.join(storageDir, "stop-guard.sh");
+  // This source file is stored CRLF, so the template below carries CRLF into the
+  // generated script - which sh on Linux/macOS chokes on (`then\r`, `fi\r`). Emit LF.
   fs.writeFileSync(
     scriptFile,
     `#!/bin/sh
-storage_dir="$1"
 json=$(cat)
-session_id=$(printf '%s' "$json" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')
-marker="$storage_dir/subagent-started-$session_id"
-if [ -f "$marker" ]; then
-  rm -f "$marker"
+# Isolate the background_tasks array before matching, so a "status":"running" that
+# merely appears in some other field (last_assistant_message quotes the payload
+# shape, say) cannot suppress the notification. Task objects hold no nested arrays,
+# so stopping at the first ] is safe.
+tasks=$(printf '%s' "$json" | sed -n 's/.*"background_tasks"[[:space:]]*:[[:space:]]*\\(\\[[^]]*\\]\\).*/\\1/p')
+if printf '%s' "$tasks" | grep -q '"status"[[:space:]]*:[[:space:]]*"running"'; then
   exit 0
 fi
 ${notifyCommand}
-`
+`.replace(/\r\n/g, "\n")
   );
-  return `sh "${scriptFile}" "${storageDir}"`;
+  return `sh "${scriptFile}"`;
 }
 
 /**
  * Wires up sbc's Claude Code hook integrations: a UserPromptSubmit hook that injects
  * live editor state into every prompt, and native OS notifications for the moments a
  * user typically wants to be pulled back to the sidebar — the agent finishing with no
- * subagent left running (Stop, guarded - see buildStopGuardCommand), a blocking
+ * background work left running (Stop, guarded - see buildStopGuardCommand), a blocking
  * mid-turn prompt (Notification/PreToolUse), and an idle reminder (Notification).
  * Everything is scoped to a per-spawn --settings file — it never touches the user's
  * own ~/.claude/settings.json or the OS (no registry writes, no installs).
@@ -159,9 +148,6 @@ export function setupClaudeHooks(
   }
 
   const preToolUseMatchers: { matcher: string; command: string }[] = [];
-  if (notifications.finished) {
-    preToolUseMatchers.push({ matcher: "Agent", command: buildMarkSubagentStartedCommand(storageDir) });
-  }
   if (notifications.needsYou) {
     preToolUseMatchers.push({
       matcher: "AskUserQuestion",
