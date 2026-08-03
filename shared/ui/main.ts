@@ -365,6 +365,9 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
     case "startupProgress":
       tabProgress.classList.toggle("hidden", !message.show);
       break;
+    case "modernUI":
+      document.body.classList.toggle("modern-ui", message.enabled);
+      break;
   }
 });
 

@@ -15,6 +15,13 @@ function nonce(): string {
   return text;
 }
 
+/** VS Code's Modern UI restyles its own editor tabs as rounded pills. The workbench
+ * marks it with a `.style-override` class on its container, which never reaches a
+ * webview iframe - so read the setting here and hand it to the webview instead. */
+function isModernUI(): boolean {
+  return vscode.workspace.getConfiguration("workbench.experimental").get<boolean>("modernUI") === true;
+}
+
 export class AgentViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private manager: AgentSessionManager | undefined;
@@ -90,6 +97,13 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
           break;
       }
     });
+
+    const configListener = vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("workbench.experimental.modernUI")) {
+        this.post({ type: "modernUI", enabled: isModernUI() });
+      }
+    });
+    webviewView.onDidDispose(() => configListener.dispose());
   }
 
   private async openFile(rawPath: string): Promise<void> {
@@ -164,7 +178,7 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
   <link rel="stylesheet" href="${styleUri}" />
   <title>${this.agent.displayName}</title>
 </head>
-<body data-agent="${this.agent.id}">
+<body data-agent="${this.agent.id}"${isModernUI() ? ' class="modern-ui"' : ""}>
   <div id="tabbar">
     <div id="tabs"></div>
     <button id="new-tab" title="New session"></button>

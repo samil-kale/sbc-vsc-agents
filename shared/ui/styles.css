@@ -3,6 +3,8 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
+  /* Matches VS Code's editor tab bar height. */
+  --tabbar-height: 35px;
   background: var(--vscode-editor-background);
   color: var(--vscode-editor-foreground);
   font-family: var(--vscode-font-family);
@@ -14,8 +16,7 @@ body {
   top: 0;
   left: 0;
   right: 0;
-  /* Matches VS Code's editor tab bar height. */
-  height: 35px;
+  height: var(--tabbar-height);
   display: flex;
   align-items: stretch;
   background: var(--vscode-editorGroupHeader-tabsBackground);
@@ -145,6 +146,76 @@ body {
   background: var(--vscode-toolbar-hoverBackground);
 }
 
+/* VS Code's Modern UI turns its editor tabs into rounded, borderless pills tinted
+   with the foreground color - inactive included, only the amount differs. The
+   workbench signals it with a class on its own container, which never reaches this
+   iframe - the host reports the setting instead (see isModernUI in webview.ts) and
+   main.ts toggles .modern-ui on <body>. Values mirror VS Code's own style override
+   (src/vs/workbench/contrib/styleOverrides/browser/media/tabs.css); the spacing and
+   radius tokens it uses are exported into webviews just like the theme colors. */
+body.modern-ui {
+  /* 4px padding + 24px tab + 4px padding. */
+  --tabbar-height: 32px;
+  --modern-tab-background: color-mix(in srgb, var(--vscode-foreground) 5%, transparent);
+  --modern-tab-hover-background: color-mix(in srgb, var(--vscode-foreground) 8%, transparent);
+  --modern-tab-active-background: color-mix(in srgb, var(--vscode-foreground) 18%, transparent);
+}
+
+/* Light themes mix a dark foreground into a light surface, which reads much
+   heavier - VS Code tones every step down accordingly. */
+body.modern-ui.vscode-light {
+  --modern-tab-background: color-mix(in srgb, var(--vscode-foreground) 4%, transparent);
+  --modern-tab-hover-background: color-mix(in srgb, var(--vscode-foreground) 6%, transparent);
+  --modern-tab-active-background: color-mix(in srgb, var(--vscode-foreground) 10%, transparent);
+}
+
+.modern-ui #tabbar {
+  box-sizing: border-box;
+  padding: var(--vscode-spacing-size40);
+  align-items: center;
+  background: transparent;
+  border-bottom: none;
+}
+
+/* VS Code's editor tabs pad the label by 4px because an icon sits in front of it;
+   ours have none, so the label would touch the pill's rounding. Its icon-less pills
+   (the panel and auxiliary bar composite tabs) use 8px instead - follow those. The
+   trailing 4px plus the 20px close button match the 28px action column VS Code
+   reserves on the right. */
+.modern-ui .tab {
+  height: 24px;
+  border: none;
+  border-radius: var(--vscode-cornerRadius-small);
+  margin-right: var(--vscode-spacing-size40);
+  padding: 0 var(--vscode-spacing-size40) 0 var(--vscode-spacing-size80);
+  background: var(--modern-tab-background);
+}
+
+.modern-ui .tab-label {
+  font-size: var(--vscode-fontSize-body1);
+  font-weight: var(--vscode-fontWeight-semiBold);
+}
+
+.modern-ui .tab:hover {
+  background: var(--modern-tab-hover-background);
+}
+
+.modern-ui .tab.active {
+  background: var(--modern-tab-active-background);
+}
+
+.modern-ui .tab-close {
+  border-radius: var(--vscode-cornerRadius-small);
+}
+
+/* Matches the add-tab button of VS Code's own session tab strip. */
+.modern-ui #new-tab {
+  width: 22px;
+  height: 22px;
+  margin: 0 0 0 var(--vscode-spacing-size40);
+  border-radius: var(--vscode-cornerRadius-small);
+}
+
 #new-tab {
   display: flex;
   align-items: center;
@@ -168,7 +239,7 @@ body {
 
 #terminals {
   position: absolute;
-  top: 35px;
+  top: var(--tabbar-height);
   left: 0;
   right: 0;
   bottom: 0;
