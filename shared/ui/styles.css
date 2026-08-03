@@ -177,6 +177,21 @@ body.modern-ui.vscode-light {
   border-bottom: none;
 }
 
+/* The shadow VS Code casts below a tree's sticky-scroll header (its
+   .monaco-tree-sticky-container-shadow, styled in abstractTree.ts): a 3px strip
+   carrying an inset box-shadow, overlaying the content below rather than taking
+   space of its own. */
+.modern-ui #tabbar::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  z-index: 1;
+  box-shadow: var(--vscode-scrollbar-shadow) 0 6px 6px -6px inset;
+}
+
 /* VS Code's editor tabs pad the label by 4px because an icon sits in front of it;
    ours have none, so the label would touch the pill's rounding. Its icon-less pills
    (the panel and auxiliary bar composite tabs) use 8px instead - follow those. The
@@ -239,7 +254,8 @@ body.modern-ui.vscode-light {
 
 #terminals {
   position: absolute;
-  top: var(--tabbar-height);
+  /* +3px so the tab bar's shadow strip stays clear of xterm's own layers. */
+  top: calc(var(--tabbar-height) + 3px);
   left: 0;
   right: 0;
   bottom: 0;
