@@ -7,7 +7,7 @@ const CLOSE_ICON_SVG =
 
 // VS Code's codicon "add", same reasoning as CLOSE_ICON_SVG above.
 const ADD_ICON_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>';
+  '<svg width="16" height="16" viewBox="0 0 14 16" fill="currentColor" aria-hidden="true"><path d="M14 7v1H8v6H7V8H1V7h6V1h1v6h6z"/></svg>';
 
 export interface TabBarCallbacks {
   onSelect: (tabId: string) => void;
