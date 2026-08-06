@@ -114,4 +114,20 @@ export interface AgentConfig {
    * being posted, so the webview can't ask for a terminal before it resolves.
    */
   prepareSpawn?: (executable: string, cwd: string) => Promise<SpawnPreparation>;
+  /**
+   * Completes a url the agent's TUI wrapped across rows, from the agent's own record of
+   * what it printed - the terminal buffer can't be told apart from a line that merely ends
+   * in a url (opencode breaks a long token at the last "." that fits, so not even the
+   * right edge marks it). Returns the full url that starts with `prefix`, or undefined
+   * when nothing is known; the webview then keeps the fragment as it is.
+   *
+   * Called only when the user holds the modifier over such a url, at most once per
+   * fragment, so an implementation may go to disk or over HTTP - but must not throw.
+   */
+  resolveUrlPrefix?: (
+    executable: string,
+    cwd: string,
+    sessionId: string,
+    prefix: string
+  ) => Promise<string | undefined>;
 }

@@ -6,7 +6,7 @@ import type { HostToWebviewMessage, WebviewToHostMessage } from "../protocol";
 import { buildXtermTheme } from "../theme";
 import { createFileLinkProvider } from "./file-links";
 import { createUrlLinkProvider } from "./url-links";
-import { isModifierHeld } from "./link-provider";
+import { isModifierHeld, type WrappedUrlResolver } from "./link-provider";
 import { TabBar } from "./tabs";
 
 declare function acquireVsCodeApi(): {
@@ -29,6 +29,45 @@ const fontFamily =
 
 function openUrl(url: string): void {
   vscode.postMessage({ type: "openUrl", url });
+}
+
+/**
+ * Answers to "resolveUrl", keyed by the fragment asked about; null means the host has no
+ * url for it and it must not be asked again. Only grows by one entry per distinct url the
+ * user holds the modifier over, so it needs no eviction.
+ */
+const resolvedUrls = new Map<string, string | null>();
+const negativeAnswers = new Map<string, number>();
+const pendingUrlRequests = new Set<string>();
+
+/**
+ * How long a "the agent knows no such url" answer is trusted. Not forever: the url may
+ * simply not have been persisted yet when it was first asked about - a message still being
+ * written is the normal case for a link that just appeared. Kept short because a retry is
+ * cheap: it only fires while the pointer sits on that very link, the in-flight set folds
+ * the per-render calls into one request, and the host answers from a local http call.
+ */
+const NEGATIVE_TTL_MS = 2000;
+
+function createWrappedUrlResolver(tabId: string): WrappedUrlResolver {
+  return {
+    lookup: (fragment) => {
+      const answeredNoAt = negativeAnswers.get(fragment);
+      if (answeredNoAt !== undefined && Date.now() - answeredNoAt > NEGATIVE_TTL_MS) {
+        negativeAnswers.delete(fragment);
+        resolvedUrls.delete(fragment);
+      }
+      return resolvedUrls.get(fragment);
+    },
+    request: (fragment) => {
+      // provideLinks runs per render, so this is called until the answer lands - the
+      // in-flight set is what keeps that down to a single message.
+      if (!pendingUrlRequests.has(fragment)) {
+        pendingUrlRequests.add(fragment);
+        vscode.postMessage({ type: "resolveUrl", tabId, fragment });
+      }
+    }
+  };
 }
 
 interface TabView {
@@ -90,7 +129,7 @@ function createTabView(tabId: string): TabView {
   // an OSC 52 escape sequence rather than relying on the browser's own text selection.
   // xterm.js ignores OSC 52 without this addon, so the CLI's copy silently goes nowhere.
   term.loadAddon(new ClipboardAddon());
-  term.registerLinkProvider(createUrlLinkProvider(term, openUrl));
+  term.registerLinkProvider(createUrlLinkProvider(term, openUrl, createWrappedUrlResolver(tabId)));
   term.registerLinkProvider(
     createFileLinkProvider(term, (path) => vscode.postMessage({ type: "openFile", path }))
   );
@@ -364,6 +403,13 @@ window.addEventListener("message", (event: MessageEvent<HostToWebviewMessage>) =
       break;
     case "startupProgress":
       tabProgress.classList.toggle("hidden", !message.show);
+      break;
+    case "resolvedUrl":
+      pendingUrlRequests.delete(message.fragment);
+      resolvedUrls.set(message.fragment, message.url);
+      if (message.url === null) {
+        negativeAnswers.set(message.fragment, Date.now());
+      }
       break;
     case "modernUI":
       document.body.classList.toggle("modern-ui", message.enabled);

@@ -78,6 +78,26 @@ equivalent for the others:
 
 Use **Ctrl+F5** (Run Without Debugging) — F5 (debugger attached) doesn't work here.
 
+## Diagnosing the webview
+
+The webview's devtools can't be reached from outside the editor, so anything only visible
+in its console has to be read out and pasted back by hand. That is slow and unreliable:
+both extensions load the same bundle, so it is easy to end up reading the *other* agent's
+webview (`document.body.dataset.agent` says which one it is).
+
+Route findings to a file instead and read that directly: post them from the webview to the
+host and append them there, to `debugLogFilePath()` from `shared/ide-context.ts`
+(`<globalStorage>/debug-output.log`; Claude Code's hooks already grant `Read()` on it).
+Tag each entry with the agent id — both extensions write to it.
+
+**Never log per render.** A link provider's `provideLinks` runs on *every* render while the
+pointer is over the terminal, and an agent TUI repaints constantly. A single `console.log`
+in that path pegged the renderer at 100% and looked exactly like a hung extension — it cost
+a whole debugging session, twice. Write only when a value actually changes, and keep the
+hot path to plain assignments.
+
+Whatever gets added this way is temporary: mark it, and strip it before committing.
+
 ## Release
 
 Pushing `production` triggers `.github/workflows/publish.yml` (publishes both

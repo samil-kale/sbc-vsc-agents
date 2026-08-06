@@ -92,6 +92,9 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
         case "openFile":
           void this.openFile(message.path);
           break;
+        case "resolveUrl":
+          void this.resolveUrl(message.tabId, message.fragment);
+          break;
         case "openUrl":
           void this.openUrl(message.url);
           break;
@@ -122,6 +125,12 @@ export class AgentViewProvider implements vscode.WebviewViewProvider {
     } catch {
       void vscode.window.showWarningMessage(`Could not open file: ${rawPath}`);
     }
+  }
+
+  /** Always answers, including with null - the webview caches that as "don't ask again". */
+  private async resolveUrl(tabId: string, fragment: string): Promise<void> {
+    const url = await this.manager?.resolveUrlPrefix(tabId, fragment);
+    this.post({ type: "resolvedUrl", fragment, url: url ?? null });
   }
 
   // Opening external links from inside a webview (e.g. window.open) is unreliable -

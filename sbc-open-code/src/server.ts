@@ -167,6 +167,23 @@ export async function ensureServer(
 }
 
 /**
+ * The server this workspace is already running on, if any - never starts one. For callers
+ * that are only along for the ride (a url lookup triggered by a hover), where starting a
+ * second instance would be the very thing this module exists to avoid.
+ */
+export async function runningServer(executable: string, cwd: string): Promise<OpencodeServer | undefined> {
+  if (current?.executable !== executable || current.cwd !== cwd) {
+    return undefined;
+  }
+  try {
+    const server = await current.server;
+    return server.running ? server : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Brings the server up before any terminal is spawned and hands the TUI the arguments to
  * attach to it, so the terminal's session and everything else this extension does run in
  * the same opencode instance rather than two that only share a database.

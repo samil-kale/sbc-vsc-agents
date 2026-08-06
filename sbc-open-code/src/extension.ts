@@ -5,6 +5,7 @@ import { readSettings } from "@shared/settings";
 import { opencodeSessionProvider } from "./sessions";
 import { prepareOpencodeSpawn } from "./server";
 import { createOpencodeNotifier, opencodePluginsInstallDir, setupOpencodeHooks } from "./opencode-hooks";
+import { resolveOpencodeUrlPrefix } from "./session-urls";
 
 export function activate(context: vscode.ExtensionContext): void {
   const config: AgentConfig = {
@@ -16,6 +17,9 @@ export function activate(context: vscode.ExtensionContext): void {
     env: { OPENCODE_TUI_CONFIG: context.asAbsolutePath("resources/tui.json") },
     sessions: opencodeSessionProvider,
     setupHooks: setupOpencodeHooks,
+    // Only consulted when the user holds the modifier over a url that ends its row, and
+    // answered from the server that is already running - it never starts one.
+    resolveUrlPrefix: resolveOpencodeUrlPrefix,
     // The generated plugin is loaded by the server, which is what runs the session - the
     // TUI only attaches to it. SBC_WORKSPACE_ROOT is the guard that plugin checks, since
     // the plugins directory is shared across workspaces.

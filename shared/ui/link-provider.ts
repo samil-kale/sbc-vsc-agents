@@ -1,6 +1,28 @@
 import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
+import { URL_BODY_CHAR } from "../urls";
 
 const isMac = navigator.platform.toLowerCase().includes("mac");
+
+/**
+ * How many rows below a cut-off url are considered as its continuation. A long url in a
+ * narrow terminal runs over more than the two or three rows a wide one needs, and the
+ * walk only happens once the agent has already reported a longer url for what's visible.
+ */
+const MAX_CONTINUATION_ROWS = 8;
+
+/**
+ * Completes a url the agent's own line wrapping cut off, from what the agent recorded
+ * printing (see AgentConfig.resolveUrlPrefix). Deliberately split into a synchronous
+ * lookup and a fire-and-forget request: provideLinks runs on every render while the
+ * mouse is over the terminal, so the answer may only ever be read from a cache, never
+ * waited for. It lands there in time for the next render.
+ */
+export interface WrappedUrlResolver {
+  /** The full url for a fragment, null once known to have none, undefined if not asked yet. */
+  lookup(fragment: string): string | null | undefined;
+  /** Asks the host. Must be cheap to call repeatedly - it is called until an answer lands. */
+  request(fragment: string): void;
+}
 
 export function isModifierHeld(event: MouseEvent | KeyboardEvent): boolean {
   return isMac ? event.metaKey : event.ctrlKey;
@@ -37,16 +59,23 @@ interface LinkSegment {
 export function createModifierGatedLinkProvider(
   terminal: Terminal,
   regex: RegExp,
-  onActivate: (text: string) => void
+  onActivate: (text: string) => void,
+  resolveWrapped?: WrappedUrlResolver
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      callback(computeLinks(bufferLineNumber, terminal, regex, onActivate));
+      callback(computeLinks(bufferLineNumber, terminal, regex, onActivate, resolveWrapped));
     }
   };
 }
 
-function computeLinks(y: number, terminal: Terminal, regex: RegExp, onActivate: (text: string) => void): ILink[] {
+function computeLinks(
+  y: number,
+  terminal: Terminal,
+  regex: RegExp,
+  onActivate: (text: string) => void,
+  resolveWrapped?: WrappedUrlResolver
+): ILink[] {
   const rex = new RegExp(regex.source, (regex.flags || "") + "g");
   const [lines, startLineIndex, offsets] = getWindowedLineStrings(y - 1, terminal);
   const line = lines.join("");
@@ -81,21 +110,122 @@ function computeLinks(y: number, terminal: Terminal, regex: RegExp, onActivate: 
       continue;
     }
 
+    // Stitching rows by geometry (see getWindowedLineStrings) only catches a wrap that ran
+    // into the right edge. opencode breaks a long token at the last "." before its wrap
+    // width instead, leaving nothing in the buffer to recognize it by - such a row looks
+    // exactly like one that simply ends in a url. So the agent is asked what it printed,
+    // and the answer is only believed if the rows below spell it out.
+    const linkText = completeWrapped(terminal, line, match.index, text, segments, resolveWrapped);
+
     // One link for the whole match, spanning every row it covers: xterm keeps only one
     // link per column of the queried row (Linkifier._removeIntersectingLinks projects each
     // link onto that row's columns and drops whatever overlaps), so a link per row would
     // have its later rows silently dropped and stay unclickable. The range decides what is
     // clickable; the underline is drawn from `segments` instead (see buildLink).
+    // Read back rather than reusing `last`: a completed url appends further rows.
+    const end = segments[segments.length - 1];
     // range expects values 1-based right side including, thus +1 except for ex
     const range = {
       start: { x: first.sx + 1, y: first.row + 1 },
-      end: { x: last.ex, y: last.row + 1 }
+      end: { x: end.ex, y: end.row + 1 }
     };
 
-    result.push(buildLink(terminal, range, segments, text, onActivate));
+    result.push(buildLink(terminal, range, segments, linkText, onActivate));
   }
 
   return result;
+}
+
+/**
+ * Extends `segments` over the rows a cut-off url continues on and returns the url to open.
+ * Falls back to `text` unchanged whenever anything doesn't line up, so the worst case is
+ * the behaviour without a resolver at all.
+ */
+function completeWrapped(
+  terminal: Terminal,
+  line: string,
+  matchIndex: number,
+  text: string,
+  segments: LinkSegment[],
+  resolveWrapped: WrappedUrlResolver | undefined
+): string {
+  const last = segments[segments.length - 1];
+  // The file-link provider shares this function and passes no resolver.
+  if (!resolveWrapped) {
+    return text;
+  }
+  // No modifier gate: the resolver is asked once per distinct fragment and the answer is
+  // cached (including "nothing"), so hovering costs a Map lookup either way. Gating it on
+  // the modifier only made the feature depend on keyboard focus landing in this webview,
+  // which it doesn't while the sidebar is merely hovered.
+  //
+  // The url as it stands on screen: the match plus whatever non-space characters follow
+  // it. That tail is what URL_REGEX refuses to end a match on ("." and friends) and is
+  // exactly where opencode cuts a url - so it belongs to the fragment being completed.
+  // Deliberately not "up to the end of the row": opencode keeps a status column over on
+  // the right, so a row's own text is rarely the last thing on it.
+  const trailing = /^\S*/.exec(line.slice(matchIndex + text.length))?.[0] ?? "";
+  const visible = text + trailing;
+  const known = resolveWrapped.lookup(visible);
+  if (known === undefined) {
+    resolveWrapped.request(visible);
+    return text;
+  }
+  if (known === null || known.length <= visible.length) {
+    return text;
+  }
+  // The agent knows a longer url - believed only if the rows below actually spell it out,
+  // so a line that merely ends in a shorter url can't pick up a longer one.
+  const rows = continuationRows(terminal, last.row);
+  const candidate = visible + rows.map((row) => row.text).join("");
+  if (!candidate.startsWith(known)) {
+    return text;
+  }
+  // Extend the underline over `trailing` only - not to the row's last visible cell, which
+  // with opencode's status column showing sits far to the right of this row's own text.
+  // Clamped anyway, in case the match ended right at a row boundary of the window.
+  last.ex = Math.min(last.ex + trailing.length, rowTextEnd(terminal, last.row));
+  let pending = known.length - visible.length;
+  for (const row of rows) {
+    if (pending <= 0) {
+      break;
+    }
+    const taken = Math.min(pending, row.text.length);
+    segments.push({ row: row.row, sx: row.offset, ex: row.offset + taken });
+    pending -= taken;
+  }
+  return known;
+}
+
+/**
+ * What the rows below `fromRow` could contribute to a url cut off at its end: each row's
+ * leading run of url characters, with the indent a CLI puts in front of a wrapped line
+ * dropped. A candidate only - the caller checks it against what the agent reports.
+ */
+function continuationRows(terminal: Terminal, fromRow: number): { row: number; offset: number; text: string }[] {
+  const rows: { row: number; offset: number; text: string }[] = [];
+  for (let row = fromRow + 1; row <= fromRow + MAX_CONTINUATION_ROWS; row++) {
+    const line = terminal.buffer.active.getLine(row);
+    if (!line) {
+      break;
+    }
+    const content = line.translateToString(true);
+    const unindented = content.replace(/^ +/, "");
+    let end = 0;
+    while (end < unindented.length && URL_BODY_CHAR.test(unindented[end])) {
+      end++;
+    }
+    if (end === 0) {
+      break;
+    }
+    rows.push({ row, offset: content.length - unindented.length, text: unindented.slice(0, end) });
+    // Deliberately no "stop once the row continues with something no url could contain":
+    // with opencode's status column showing, every row continues with something. Whether
+    // these rows really belong to the url is decided by matching the agent's own record
+    // against them, and a row that contributes junk makes that match fail - which is the
+    // outcome we want anyway.
+  }
+  return rows;
 }
 
 function buildLink(

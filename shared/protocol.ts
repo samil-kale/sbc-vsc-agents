@@ -24,6 +24,12 @@ export type HostToWebviewMessage =
   | { type: "status"; tabId: string; status: SessionStatus }
   | { type: "pasteText"; text: string }
   | { type: "startupProgress"; show: boolean }
+  /**
+   * Answer to a "resolveUrl" request: the full url that fragment belongs to, or null if
+   * the agent doesn't know one. Null is cached by the webview as well, so an unresolvable
+   * fragment is asked about exactly once.
+   */
+  | { type: "resolvedUrl"; fragment: string; url: string | null }
   | { type: "modernUI"; enabled: boolean };
 
 export type WebviewToHostMessage =
@@ -38,4 +44,10 @@ export type WebviewToHostMessage =
   | { type: "showShiftDropHint" }
   | { type: "dropFile"; name: string; dataBase64: string }
   | { type: "openFile"; path: string }
+  /**
+   * A url on screen ends its row and may have been cut there by the agent's own line
+   * wrapping - asks what full url it belongs to. Sent at most once per fragment, and only
+   * while the modifier is held, i.e. when the link is about to be clickable anyway.
+   */
+  | { type: "resolveUrl"; tabId: string; fragment: string }
   | { type: "openUrl"; url: string };

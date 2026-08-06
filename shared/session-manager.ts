@@ -295,6 +295,25 @@ export class AgentSessionManager {
     }
   }
 
+  /**
+   * What full url a fragment on screen belongs to - see AgentConfig.resolveUrlPrefix.
+   * Undefined whenever it can't be answered (agent doesn't implement it, tab has no
+   * session yet, lookup failed): the webview then leaves the link as it found it.
+   */
+  async resolveUrlPrefix(tabId: string, prefix: string): Promise<string | undefined> {
+    const { agent, agentPath, workspaceRoot } = this.options;
+    const sessionId = this.tabs.find((tab) => tab.tabId === tabId)?.sessionId;
+    if (!agent.resolveUrlPrefix || sessionId === undefined) {
+      return undefined;
+    }
+    try {
+      return await agent.resolveUrlPrefix(agentPath, workspaceRoot, sessionId, prefix);
+    } catch (error) {
+      console.error("[sbc] url lookup failed:", error);
+      return undefined;
+    }
+  }
+
   newTab(): void {
     const tab = this.createPendingTab();
     this.tabs.push(tab);
