@@ -10,6 +10,15 @@ function isModifierKey(event: KeyboardEvent): boolean {
   return isMac ? event.key === "Meta" : event.key === "Control";
 }
 
+/**
+ * How many rows the search for a wrapped token may walk in each direction. The character
+ * budget below it can't bound this on its own: a row that trims to nothing contributes
+ * zero to it, and isContinuation() reports every isWrapped row as one - so a run of blank
+ * rows written by autowrap (what a TUI's start screen produces) would let the walk run to
+ * the end of the scrollback, on every render. A wrapped token spans a handful of rows.
+ */
+const MAX_WINDOW_ROWS = 20;
+
 interface LinkSegment {
   row: number;
   /** 0-based cell the segment starts at. */
@@ -264,6 +273,7 @@ function getWindowedLineStrings(lineIndex: number, terminal: Terminal): [string[
   let topIdx = lineIndex;
   let bottomIdx = lineIndex;
   let length: number;
+  let rows: number;
   let content: string;
   let offset: number;
   const lines: string[] = [];
@@ -272,10 +282,11 @@ function getWindowedLineStrings(lineIndex: number, terminal: Terminal): [string[
   if (terminal.buffer.active.getLine(lineIndex)) {
     const [currentContent, currentOffset] = readLine(terminal, lineIndex);
 
-    // expand top, stop on whitespace or length > 2048
+    // expand top, stop on whitespace, length > 2048 or MAX_WINDOW_ROWS rows
     if (isContinuation(terminal, lineIndex) && currentContent[0] !== " ") {
       length = 0;
-      while (terminal.buffer.active.getLine(--topIdx) && length < 2048) {
+      rows = 0;
+      while (terminal.buffer.active.getLine(--topIdx) && length < 2048 && ++rows <= MAX_WINDOW_ROWS) {
         [content, offset] = readLine(terminal, topIdx);
         length += content.length;
         lines.push(content);
@@ -291,9 +302,15 @@ function getWindowedLineStrings(lineIndex: number, terminal: Terminal): [string[
     lines.push(currentContent);
     offsets.push(currentOffset);
 
-    // expand bottom, stop on whitespace or length > 2048
+    // expand bottom, stop on whitespace, length > 2048 or MAX_WINDOW_ROWS rows
     length = 0;
-    while (isContinuation(terminal, bottomIdx + 1) && terminal.buffer.active.getLine(++bottomIdx) && length < 2048) {
+    rows = 0;
+    while (
+      isContinuation(terminal, bottomIdx + 1) &&
+      terminal.buffer.active.getLine(++bottomIdx) &&
+      length < 2048 &&
+      ++rows <= MAX_WINDOW_ROWS
+    ) {
       [content, offset] = readLine(terminal, bottomIdx);
       length += content.length;
       lines.push(content);
