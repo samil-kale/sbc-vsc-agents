@@ -35,7 +35,7 @@ function buildWindowsCommand(storageDir: string, id: string, title: string, body
 [void][Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
 
 $template = @"
-<toast>
+<toast activationType="protocol" launch="">
   <visual>
     <binding template="ToastGeneric">
       <text>${escapeXml(title)}</text>
@@ -45,6 +45,11 @@ $template = @"
 </toast>
 "@
 
+# activationType="protocol" with an empty launch URI makes the click a no-op — there
+# is nothing to launch, so the toast just dismisses. Without it the click falls back to
+# activating the app behind $appId, and with VS Code's AUMID that pops its "an external
+# application wants to open ..." dialog. activationType="background" does NOT help
+# (verified): the click still activates VS Code.
 $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
 $xml.LoadXml($template)
 try {
