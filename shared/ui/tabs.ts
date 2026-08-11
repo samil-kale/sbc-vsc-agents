@@ -1,9 +1,12 @@
 import type { TabDescriptor } from "../protocol";
 
-// VS Code's codicon "close", inlined as SVG - the codicon font isn't available in
-// the webview, and a text "×" renders smaller than the 16px icon VS Code tabs use.
+// VS Code's codicon "close" (U+EA76), inlined as SVG - the codicon font isn't
+// available in the webview, and a text "×" renders smaller than the 16px icon VS Code
+// tabs use. The outline is the glyph of the shipped codicon.ttf (VS Code 1.132),
+// scaled to the 16px em box; that redraw made the X span nearly the whole box, where
+// the older one only reached from 3.6 to 12.4.
 const CLOSE_ICON_SVG =
-  '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 8.707l3.646 3.647.708-.707L8.707 8l3.647-3.646-.707-.708L8 7.293 4.354 3.646l-.708.708L7.293 8l-3.647 3.646.708.708L8 8.707z"/></svg>';
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M13.867 13.173Q14.027 13.28 14.027 13.493Q14.027 13.707 13.867 13.867Q13.707 14.027 13.493 14.027Q13.28 14.027 13.173 13.867L8 8.693L2.827 13.867Q2.72 14.027 2.507 14.027Q2.293 14.027 2.16 13.867Q2.027 13.707 2.027 13.493Q2.027 13.28 2.133 13.173L7.307 8L2.133 2.827Q2.027 2.72 2.027 2.507Q2.027 2.293 2.16 2.133Q2.293 1.973 2.507 1.973Q2.72 1.973 2.88 2.133L8 7.307L13.173 2.133Q13.333 1.973 13.52 1.973Q13.707 1.973 13.867 2.133Q14.027 2.293 14.027 2.507Q14.027 2.72 13.867 2.827L8.747 8L13.867 13.173Z"/></svg>';
 
 // VS Code's codicon "add", same reasoning as CLOSE_ICON_SVG above.
 const ADD_ICON_SVG =
